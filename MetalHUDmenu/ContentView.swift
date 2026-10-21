@@ -36,6 +36,8 @@ struct ContentView: View {
         .init(key: "gputime", label: "GPU Time"),
         .init(key: "thermal", label: "Thermal State"),
         .init(key: "fpsgraph", label: "FPS Graph"),
+        .init(key: "toplabeledcommandbuffers", label: "Top Labeled Command Buffers"),
+        .init(key: "toplabeledencoders", label: "Top Labeled Encoders"),
         .init(key: "layerscale", label: "Layer Scale"),
         .init(key: "refreshrate", label: "Refresh Rate"),
         .init(key: "gamemode", label: "Game Mode"),
@@ -77,16 +79,18 @@ struct ContentView: View {
                 presetButton("FPS Only", elements: ["fps"])
                 presetButton("Full", elements: allElements.map { $0.key })
                 presetButton("Rich", elements: ["fps", "gputime", "memory", "thermal", "shaders"])
+                // Exactly what Apple's panel exports for its Default preset.
                 presetButton("Default", elements: [
                     "device",
                     "rosetta",
                     "layersize",
                     "memory",
-                    "gamemode",
                     "fps",
-                    "gputime",
                     "frameinterval",
-                    "frameintervalgraph"
+                    "frameintervalgraph",
+                    "gputime",
+                    "gamemode",
+                    "client"
                 ])
             }
 
@@ -168,6 +172,24 @@ struct ContentView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+
+            Divider().padding(.vertical, 4)
+
+            // MARK: - Display options
+            Text("Display")
+                .font(.headline)
+
+            Toggle("Performance Insights", isOn: $settings.insightsEnabled)
+                .toggleStyle(.checkbox)
+            Toggle("Show metrics value range", isOn: $settings.showMetricsRange)
+                .toggleStyle(.checkbox)
+            Toggle("Show metrics with 0 value", isOn: $settings.showZeroMetrics)
+                .toggleStyle(.checkbox)
+            Toggle("Encoder GPU time tracking", isOn: $settings.encoderTimingEnabled)
+                .toggleStyle(.checkbox)
+            Text("Encoder timing raises the HUD's own CPU cost.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
 
             Divider().padding(.vertical, 4)
 

@@ -12,6 +12,8 @@ A tiny macOS utility that configures Apple’s **Metal Performance HUD** system-
 - Adjust **opacity** and **scale**
 - Set **alignment** (top/center/bottom, left/center/right)
 - **Logging** — HUD data and shader compilation, to the unified log
+- **Display options** — performance insights, metric value ranges, zero-value
+  metrics, encoder GPU time tracking
 - **Import** a configuration exported by Apple's own HUD panel
 - “Set & forget” for all apps (newly launched apps inherit the settings)
 
@@ -39,6 +41,18 @@ that plist and fills in every setting from it.
 
 Worth doing once: the export is the authoritative list of what your macOS
 version actually supports, which varies by release.
+
+Every variable the HUD reads on macOS 26, obtained that way with all options
+enabled:
+
+```
+MTL_HUD_ENABLED                  MTL_HUD_ELEMENTS
+MTL_HUD_ALIGNMENT                MTL_HUD_SCALE
+MTL_HUD_OPACITY                  MTL_HUD_LOG_ENABLED
+MTL_HUD_LOG_SHADER_ENABLED       MTL_HUD_ENCODER_TIMING_ENABLED
+MTL_HUD_INSIGHTS_ENABLED         MTL_HUD_SHOW_METRICS_RANGE
+MTL_HUD_SHOW_ZERO_METRICS
+```
 
 ## Requirements
 - macOS 26 (Tahoe)

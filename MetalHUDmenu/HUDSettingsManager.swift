@@ -47,6 +47,28 @@ class HUDSettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(logShaderEnabled, forKey: "logShaderEnabled") }
     }
 
+    /// MTL_HUD_ENCODER_TIMING_ENABLED - per-encoder GPU timings. Apple warns
+    /// this raises the HUD's own CPU cost, so it is off by default.
+    @Published var encoderTimingEnabled: Bool {
+        didSet { UserDefaults.standard.set(encoderTimingEnabled, forKey: "encoderTimingEnabled") }
+    }
+
+    /// MTL_HUD_INSIGHTS_ENABLED - the HUD's Insights panel.
+    @Published var insightsEnabled: Bool {
+        didSet { UserDefaults.standard.set(insightsEnabled, forKey: "insightsEnabled") }
+    }
+
+    /// MTL_HUD_SHOW_METRICS_RANGE - show each metric's min/max as well as now.
+    @Published var showMetricsRange: Bool {
+        didSet { UserDefaults.standard.set(showMetricsRange, forKey: "showMetricsRange") }
+    }
+
+    /// MTL_HUD_SHOW_ZERO_METRICS - keep metrics on screen while they read zero
+    /// instead of hiding them.
+    @Published var showZeroMetrics: Bool {
+        didSet { UserDefaults.standard.set(showZeroMetrics, forKey: "showZeroMetrics") }
+    }
+
     // MARK: - Open at Login
 
     @Published var openAtLogin: Bool {
@@ -90,6 +112,10 @@ class HUDSettingsManager: ObservableObject {
         self.enableHUDOnBoot = defaults.object(forKey: "enableHUDOnBoot") as? Bool ?? false
         self.logEnabled = defaults.object(forKey: "logEnabled") as? Bool ?? false
         self.logShaderEnabled = defaults.object(forKey: "logShaderEnabled") as? Bool ?? false
+        self.encoderTimingEnabled = defaults.object(forKey: "encoderTimingEnabled") as? Bool ?? false
+        self.insightsEnabled = defaults.object(forKey: "insightsEnabled") as? Bool ?? false
+        self.showMetricsRange = defaults.object(forKey: "showMetricsRange") as? Bool ?? false
+        self.showZeroMetrics = defaults.object(forKey: "showZeroMetrics") as? Bool ?? false
         self.openAtLogin = SMAppService.mainApp.status == .enabled
 
         if let saved = defaults.stringArray(forKey: "selectedElements") {
@@ -121,6 +147,11 @@ class HUDSettingsManager: ObservableObject {
                 runLaunchctl(["unsetenv", "MTL_HUD_LOG_SHADER_ENABLED"])
             }
 
+            setFlag("MTL_HUD_ENCODER_TIMING_ENABLED", encoderTimingEnabled)
+            setFlag("MTL_HUD_INSIGHTS_ENABLED", insightsEnabled)
+            setFlag("MTL_HUD_SHOW_METRICS_RANGE", showMetricsRange)
+            setFlag("MTL_HUD_SHOW_ZERO_METRICS", showZeroMetrics)
+
             statusMessage = "✅ Applied. Affects apps launched from now on."
         } else {
             disableHUD()
@@ -130,9 +161,7 @@ class HUDSettingsManager: ObservableObject {
     func disableHUD() {
         // Clear every variable, not just the enable flag: leaving the others
         // set means a later enable silently inherits stale values.
-        for key in ["MTL_HUD_ENABLED", "MTL_HUD_ELEMENTS", "MTL_HUD_OPACITY",
-                    "MTL_HUD_SCALE", "MTL_HUD_ALIGNMENT",
-                    "MTL_HUD_LOG_ENABLED", "MTL_HUD_LOG_SHADER_ENABLED"] {
+        for key in Self.allKeys {
             runLaunchctl(["unsetenv", key])
         }
         statusMessage = "🚫 Disabled. Running apps keep the HUD until restarted."
@@ -142,6 +171,20 @@ class HUDSettingsManager: ObservableObject {
         if enableHUDOnBoot && hudEnabled {
             applySettings()
         }
+    }
+
+    /// Every variable the HUD reads, as reported by "Export HUD Configuration"
+    /// in Apple's own panel with all options enabled.
+    static let allKeys = [
+        "MTL_HUD_ENABLED", "MTL_HUD_ELEMENTS", "MTL_HUD_OPACITY", "MTL_HUD_SCALE",
+        "MTL_HUD_ALIGNMENT", "MTL_HUD_LOG_ENABLED", "MTL_HUD_LOG_SHADER_ENABLED",
+        "MTL_HUD_ENCODER_TIMING_ENABLED", "MTL_HUD_INSIGHTS_ENABLED",
+        "MTL_HUD_SHOW_METRICS_RANGE", "MTL_HUD_SHOW_ZERO_METRICS"
+    ]
+
+    /// The HUD treats any value as enabled, so a flag is set or removed.
+    private func setFlag(_ key: String, _ on: Bool) {
+        runLaunchctl([on ? "setenv" : "unsetenv", key] + (on ? ["1"] : []))
     }
 
     // MARK: - Import from Apple's HUD panel
@@ -166,6 +209,10 @@ class HUDSettingsManager: ObservableObject {
         if let v = plist["MTL_HUD_ENABLED"] as? Bool { hudEnabled = v }
         if let v = plist["MTL_HUD_LOG_ENABLED"] as? Bool { logEnabled = v }
         if let v = plist["MTL_HUD_LOG_SHADER_ENABLED"] as? Bool { logShaderEnabled = v }
+        if let v = plist["MTL_HUD_ENCODER_TIMING_ENABLED"] as? Bool { encoderTimingEnabled = v }
+        if let v = plist["MTL_HUD_INSIGHTS_ENABLED"] as? Bool { insightsEnabled = v }
+        if let v = plist["MTL_HUD_SHOW_METRICS_RANGE"] as? Bool { showMetricsRange = v }
+        if let v = plist["MTL_HUD_SHOW_ZERO_METRICS"] as? Bool { showZeroMetrics = v }
         if let v = plist["MTL_HUD_SCALE"] as? Double { scale = v }
         if let v = plist["MTL_HUD_OPACITY"] as? Double { opacity = v }
 
