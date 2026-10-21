@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var settings: HUDSettingsManager
@@ -154,6 +155,22 @@ struct ContentView: View {
 
             Divider().padding(.vertical, 4)
 
+            // MARK: - Logging
+            Text("Logging")
+                .font(.headline)
+
+            Toggle("Log HUD data", isOn: $settings.logEnabled)
+                .toggleStyle(.checkbox)
+            Toggle("Log shader compilation", isOn: $settings.logShaderEnabled)
+                .toggleStyle(.checkbox)
+
+            Text("Writes to the unified log. Read with:\nlog stream --predicate 'eventMessage CONTAINS \"metal-HUD\"'")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            Divider().padding(.vertical, 4)
+
             // MARK: - Launch settings
             Toggle("Open at Login", isOn: $settings.openAtLogin)
                 .toggleStyle(.switch)
@@ -174,6 +191,17 @@ struct ContentView: View {
                 Button("Quit App") { NSApplication.shared.terminate(nil) }
             }
 
+            // The single most common reason this looks broken: the variables
+            // are read when a process starts, so a running game keeps the old
+            // settings however many times you press Apply.
+            Text("Settings reach apps launched afterwards — restart the game to see changes.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Button("Import Apple HUD Config…") { importConfig() }
+                .buttonStyle(.borderless)
+                .font(.caption)
+
             if !settings.statusMessage.isEmpty {
                 Text(settings.statusMessage)
                     .font(.caption)
@@ -185,6 +213,20 @@ struct ContentView: View {
         }
         .padding(16)
         .frame(width: 310)
+    }
+
+    // MARK: - Import
+
+    /// Load a plist exported by Apple's HUD panel (Shift-Fn-F12 -> Export).
+    private func importConfig() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.propertyList]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose a plist exported from Apple's Metal HUD panel."
+        if panel.runModal() == .OK, let url = panel.url {
+            settings.importConfiguration(from: url)
+        }
     }
 
     // MARK: - Preset Buttons

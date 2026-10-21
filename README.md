@@ -11,7 +11,34 @@ A tiny macOS utility that configures Apple’s **Metal Performance HUD** system-
 - Choose elements (e.g., FPS, GPU time, memory, thermal)
 - Adjust **opacity** and **scale**
 - Set **alignment** (top/center/bottom, left/center/right)
+- **Logging** — HUD data and shader compilation, to the unified log
+- **Import** a configuration exported by Apple's own HUD panel
 - “Set & forget” for all apps (newly launched apps inherit the settings)
+
+## Logging
+
+Two options write to the unified log, which is how you get frame timings out of
+the HUD rather than just reading them on screen:
+
+| | |
+|---|---|
+| **Log HUD data** | `MTL_HUD_LOG_ENABLED` — per-frame numbers |
+| **Log shader compilation** | `MTL_HUD_LOG_SHADER_ENABLED` |
+
+Read them with:
+
+```sh
+log stream --predicate 'eventMessage CONTAINS "metal-HUD"'
+```
+
+## Importing from Apple's HUD panel
+
+Press **Shift-Fn-F12** over any Metal app for Apple's own HUD panel, which has
+an **Export HUD Configuration** button. **Import Apple HUD Config…** here reads
+that plist and fills in every setting from it.
+
+Worth doing once: the export is the authoritative list of what your macOS
+version actually supports, which varies by release.
 
 ## Requirements
 - macOS 26 (Tahoe)
@@ -26,7 +53,13 @@ A tiny macOS utility that configures Apple’s **Metal Performance HUD** system-
 4. Choose **Alignment**.
 5. Click **Apply**
 
-**Tip: HUD settings are applied via environment variables and affect **newly launched** processes.**
+**HUD settings are environment variables, read when a process starts.** A game
+that is already running keeps its old settings however many times you press
+Apply — restart it. This is the usual reason the app looks like it is doing
+nothing.
+
+They also do not survive a reboot. Use **Open at Login** with **Enable HUD on
+Boot** to have them re-applied.
 
 
 
