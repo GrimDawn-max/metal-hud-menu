@@ -172,6 +172,7 @@ struct ContentView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
 
             Divider().padding(.vertical, 4)
 
@@ -190,6 +191,7 @@ struct ContentView: View {
             Text("Encoder timing raises the HUD's own CPU cost.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Divider().padding(.vertical, 4)
 
@@ -219,6 +221,7 @@ struct ContentView: View {
             Text("Settings reach apps launched afterwards — restart the game to see changes.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Button("Import Apple HUD Config…") { importConfig() }
                 .buttonStyle(.borderless)
