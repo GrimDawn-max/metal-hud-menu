@@ -82,6 +82,22 @@ class HUDSettingsManager: ObservableObject {
         }
     }
 
+    /// Options that add work to the render path rather than just drawing more
+    /// on screen. Encoder timing instruments every command encoder, which Apple
+    /// warns about in its own panel; on a translated D3D12 title it is enough to
+    /// change timing noticeably.
+    var costlyOptionsEnabled: Bool {
+        encoderTimingEnabled || logShaderEnabled
+    }
+
+    /// Turn off everything that instruments the game, leaving the HUD showing.
+    func useSafeOptions() {
+        encoderTimingEnabled = false
+        logShaderEnabled = false
+        insightsEnabled = false
+        statusMessage = "Instrumentation off. Press Apply, then restart the game."
+    }
+
     // MARK: - Status message (not persisted)
 
     @Published var statusMessage: String = ""
@@ -152,7 +168,9 @@ class HUDSettingsManager: ObservableObject {
             setFlag("MTL_HUD_SHOW_METRICS_RANGE", showMetricsRange)
             setFlag("MTL_HUD_SHOW_ZERO_METRICS", showZeroMetrics)
 
-            statusMessage = "✅ Applied. Affects apps launched from now on."
+            statusMessage = costlyOptionsEnabled
+                ? "⚠️ Applied with instrumentation on — this adds work to the render path."
+                : "✅ Applied. Affects apps launched from now on."
         } else {
             disableHUD()
         }
@@ -230,7 +248,12 @@ class HUDSettingsManager: ObservableObject {
             }
         }
 
-        statusMessage = "📥 Imported \(url.lastPathComponent). Press Apply."
+        if costlyOptionsEnabled {
+            statusMessage = "📥 Imported \(url.lastPathComponent) — note it enables "
+                          + "instrumentation that can affect game performance. Press Apply."
+        } else {
+            statusMessage = "📥 Imported \(url.lastPathComponent). Press Apply."
+        }
         return true
     }
 

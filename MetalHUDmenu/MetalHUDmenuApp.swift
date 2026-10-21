@@ -26,11 +26,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             button.action = #selector(togglePopover)
         }
 
-        // Setup popover
-        popover.contentSize = NSSize(width: 320, height: 580)
+        // Setup popover.
+        //
+        // NSHostingController reports the SwiftUI view's own height, so the
+        // popover grows and shrinks as sections are expanded. A fixed
+        // contentSize clipped the content instead: with everything open the
+        // Apply row fell outside the visible area, and clicking where it
+        // appeared to be counted as a click outside a .transient popover,
+        // which closed it.
         popover.behavior = .transient
-        popover.contentViewController = NSViewController()
-        popover.contentViewController?.view = NSHostingView(rootView: ContentView(settings: settings))
+        popover.contentViewController =
+            NSHostingController(rootView: ContentView(settings: settings))
 
         // Auto-apply HUD settings on boot if enabled
         settings.applyOnBootIfNeeded()
@@ -41,8 +47,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if popover.isShown {
                 popover.performClose(nil)
             } else {
+                // Without activating first, the popover can open behind the
+                // frontmost application and appear not to have opened at all.
+                NSApp.activate(ignoringOtherApps: true)
                 popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-                popover.contentViewController?.view.window?.makeKey()
+                popover.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
             }
         }
     }

@@ -166,7 +166,7 @@ struct ContentView: View {
                                 .toggleStyle(.checkbox)
                             Toggle("Encoder GPU time tracking", isOn: $settings.encoderTimingEnabled)
                                 .toggleStyle(.checkbox)
-                            Text("Encoder timing raises the HUD's own CPU cost.")
+                            Text("Encoder timing instruments every command encoder. Apple warns it raises CPU cost; on translated games it can affect stability. Leave off unless you are measuring.")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -184,8 +184,6 @@ struct ContentView: View {
                                 .disabled(!settings.openAtLogin)
                                 .foregroundStyle(settings.openAtLogin ? .primary : .secondary)
                             Button("Import Apple HUD Config…") { importConfig() }
-                                .buttonStyle(.borderless)
-                                .font(.caption)
                         }
                         .padding(.leading, 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -194,7 +192,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.trailing, 6)
             }
-            .frame(maxHeight: 400)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
 
@@ -214,6 +212,20 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if settings.costlyOptionsEnabled {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Instrumentation is on and adds work to the render path.")
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Turn instrumentation off") { settings.useSafeOptions() }
+                            .font(.caption)
+                    }
+                }
+            }
+
             if !settings.statusMessage.isEmpty {
                 Text(settings.statusMessage)
                     .font(.caption)
@@ -222,7 +234,7 @@ struct ContentView: View {
             }
         }
         .padding(16)
-        .frame(width: 320)
+        .frame(width: 320, height: 560)
     }
 
     /// The author's scroll view on macOS, a plain one elsewhere.
