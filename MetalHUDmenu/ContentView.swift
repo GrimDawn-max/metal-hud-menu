@@ -88,7 +88,7 @@ struct ContentView: View {
             sectionScroll {
                 VStack(alignment: .leading, spacing: 6) {
 
-                    DisclosureGroup("Presets", isExpanded: $expandPresets) {
+                    section("Presets", isExpanded: $expandPresets) {
                         VStack(alignment: .leading, spacing: 6) {
                             presetButton("FPS Only", elements: ["fps"])
                             presetButton("Full", elements: allElements.map { $0.key })
@@ -104,7 +104,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    DisclosureGroup("Elements", isExpanded: $expandElements) {
+                    section("Elements", isExpanded: $expandElements) {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(allElements) { element in
                                 Toggle(element.label, isOn: Binding(
@@ -121,7 +121,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    DisclosureGroup("Appearance", isExpanded: $expandAppearance) {
+                    section("Appearance", isExpanded: $expandAppearance) {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text("Scale: \(String(format: "%.2f", settings.scale))")
@@ -140,7 +140,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    DisclosureGroup("Logging", isExpanded: $expandLogging) {
+                    section("Logging", isExpanded: $expandLogging) {
                         VStack(alignment: .leading, spacing: 4) {
                             Toggle("Log HUD data", isOn: $settings.logEnabled)
                                 .toggleStyle(.checkbox)
@@ -156,7 +156,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    DisclosureGroup("Display", isExpanded: $expandDisplay) {
+                    section("Display", isExpanded: $expandDisplay) {
                         VStack(alignment: .leading, spacing: 4) {
                             Toggle("Performance Insights", isOn: $settings.insightsEnabled)
                                 .toggleStyle(.checkbox)
@@ -175,7 +175,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    DisclosureGroup("Launch", isExpanded: $expandLaunch) {
+                    section("Launch", isExpanded: $expandLaunch) {
                         VStack(alignment: .leading, spacing: 6) {
                             Toggle("Open at Login", isOn: $settings.openAtLogin)
                                 .toggleStyle(.switch)
@@ -235,6 +235,48 @@ struct ContentView: View {
         }
         .padding(16)
         .frame(width: 320, height: 560)
+    }
+
+    /// A collapsible section whose whole header row is the click target.
+    ///
+    /// DisclosureGroup only accepts clicks on its chevron, which is a very small
+    /// thing to hit. This spans the full width, uses contentShape so the empty
+    /// space counts too, and gives the row a background so it reads as something
+    /// you can press.
+    @ViewBuilder
+    private func section<C: View>(_ title: String,
+                                  isExpanded: Binding<Bool>,
+                                  @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.wrappedValue.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: isExpanded.wrappedValue ? "chevron.down" : "chevron.forward")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12, alignment: .center)
+                    Text(title)
+                        .font(.headline)
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.primary.opacity(0.06))
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded.wrappedValue {
+                content()
+            }
+        }
     }
 
     /// The author's scroll view on macOS, a plain one elsewhere.
