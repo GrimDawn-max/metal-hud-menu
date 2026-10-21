@@ -64,149 +64,140 @@ struct ContentView: View {
         .init(name: "Bottom Left", key: "bottomLeft", value: "18")
     ]
 
+    // MARK: - Which sections are open
+    //
+    // Remembered per user: the window is long enough that whichever sections
+    // somebody actually uses should still be open next time.
+
+    @AppStorage("expandPresets")    private var expandPresets = false
+    @AppStorage("expandElements")   private var expandElements = true
+    @AppStorage("expandAppearance") private var expandAppearance = false
+    @AppStorage("expandLogging")    private var expandLogging = false
+    @AppStorage("expandDisplay")    private var expandDisplay = false
+    @AppStorage("expandLaunch")     private var expandLaunch = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
+
+            // Always visible: the switch everything else qualifies.
             Toggle("Enable Metal HUD", isOn: $settings.hudEnabled)
                 .toggleStyle(.switch)
-                .padding(.bottom, 8)
 
             Divider()
 
-            // MARK: - Presets
-            Text("Presets")
-                .font(.headline)
-            VStack(alignment: .leading, spacing: 6) {
-                presetButton("FPS Only", elements: ["fps"])
-                presetButton("Full", elements: allElements.map { $0.key })
-                presetButton("Rich", elements: ["fps", "gputime", "memory", "thermal", "shaders"])
-                // Exactly what Apple's panel exports for its Default preset.
-                presetButton("Default", elements: [
-                    "device",
-                    "rosetta",
-                    "layersize",
-                    "memory",
-                    "fps",
-                    "frameinterval",
-                    "frameintervalgraph",
-                    "gputime",
-                    "gamemode",
-                    "client"
-                ])
-            }
+            sectionScroll {
+                VStack(alignment: .leading, spacing: 6) {
 
-            Divider().padding(.vertical, 4)
+                    DisclosureGroup("Presets", isExpanded: $expandPresets) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            presetButton("FPS Only", elements: ["fps"])
+                            presetButton("Full", elements: allElements.map { $0.key })
+                            presetButton("Rich", elements: ["fps", "gputime", "memory", "thermal", "shaders"])
+                            // Exactly what Apple's panel exports for its Default preset.
+                            presetButton("Default", elements: [
+                                "device", "rosetta", "layersize", "memory", "fps",
+                                "frameinterval", "frameintervalgraph", "gputime",
+                                "gamemode", "client"
+                            ])
+                        }
+                        .padding(.leading, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
 
-            // MARK: - Elements
-            Text("Elements")
-                .font(.headline)
-
-            #if os(macOS)
-            AlwaysVisibleScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(allElements) { element in
-                        Toggle(element.label, isOn: Binding(
-                            get: { settings.selectedElements.contains(element.key) },
-                            set: { newValue in
-                                if newValue { settings.selectedElements.insert(element.key) }
-                                else { settings.selectedElements.remove(element.key) }
+                    DisclosureGroup("Elements", isExpanded: $expandElements) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(allElements) { element in
+                                Toggle(element.label, isOn: Binding(
+                                    get: { settings.selectedElements.contains(element.key) },
+                                    set: { on in
+                                        if on { settings.selectedElements.insert(element.key) }
+                                        else { settings.selectedElements.remove(element.key) }
+                                    }
+                                ))
+                                .toggleStyle(.checkbox)
                             }
-                        ))
-                        .toggleStyle(.checkbox)
+                        }
+                        .padding(.leading, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    DisclosureGroup("Appearance", isExpanded: $expandAppearance) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Scale: \(String(format: "%.2f", settings.scale))")
+                                Slider(value: $settings.scale, in: 0.05...1.0, step: 0.01)
+                            }
+                            HStack {
+                                Text("Opacity: \(Int(settings.opacity * 100))%")
+                                Slider(value: $settings.opacity, in: 0.1...1.0, step: 0.01)
+                            }
+                            Picker("Location", selection: $settings.alignment) {
+                                ForEach(alignments) { a in Text(a.name).tag(a.key) }
+                            }
+                            .pickerStyle(.menu)
+                        }
+                        .padding(.leading, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    DisclosureGroup("Logging", isExpanded: $expandLogging) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Log HUD data", isOn: $settings.logEnabled)
+                                .toggleStyle(.checkbox)
+                            Toggle("Log shader compilation", isOn: $settings.logShaderEnabled)
+                                .toggleStyle(.checkbox)
+                            Text("Writes to the unified log. Read with:\nlog stream --predicate 'eventMessage CONTAINS \"metal-HUD\"'")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.leading, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    DisclosureGroup("Display", isExpanded: $expandDisplay) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Performance Insights", isOn: $settings.insightsEnabled)
+                                .toggleStyle(.checkbox)
+                            Toggle("Show metrics value range", isOn: $settings.showMetricsRange)
+                                .toggleStyle(.checkbox)
+                            Toggle("Show metrics with 0 value", isOn: $settings.showZeroMetrics)
+                                .toggleStyle(.checkbox)
+                            Toggle("Encoder GPU time tracking", isOn: $settings.encoderTimingEnabled)
+                                .toggleStyle(.checkbox)
+                            Text("Encoder timing raises the HUD's own CPU cost.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.leading, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    DisclosureGroup("Launch", isExpanded: $expandLaunch) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Toggle("Open at Login", isOn: $settings.openAtLogin)
+                                .toggleStyle(.switch)
+                            Toggle("Enable HUD on Boot", isOn: $settings.enableHUDOnBoot)
+                                .toggleStyle(.switch)
+                                .disabled(!settings.openAtLogin)
+                                .foregroundStyle(settings.openAtLogin ? .primary : .secondary)
+                            Button("Import Apple HUD Config…") { importConfig() }
+                                .buttonStyle(.borderless)
+                                .font(.caption)
+                        }
+                        .padding(.leading, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.trailing, 6)
             }
-            .frame(height: 180)
-            #else
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(allElements) { element in
-                        Toggle(element.label, isOn: Binding(
-                            get: { settings.selectedElements.contains(element.key) },
-                            set: { newValue in
-                                if newValue { settings.selectedElements.insert(element.key) }
-                                else { settings.selectedElements.remove(element.key) }
-                            }
-                        ))
-                        .toggleStyle(.checkbox)
-                    }
-                }
-            }
-            .frame(height: 180)
-            #endif
+            .frame(maxHeight: 400)
 
-            Divider().padding(.vertical, 4)
+            Divider()
 
-            // MARK: - Sliders and Alignment
-            Group {
-                HStack {
-                    Text("Scale: \(String(format: "%.2f", settings.scale))")
-                    Slider(value: $settings.scale, in: 0.05...1.0, step: 0.01)
-                }
-                HStack {
-                    Text("Opacity: \(Int(settings.opacity * 100))%")
-                    Slider(value: $settings.opacity, in: 0.1...1.0, step: 0.01)
-                }
-
-                Picker("Location", selection: $settings.alignment) {
-                    ForEach(alignments) { a in
-                        Text(a.name).tag(a.key)
-                    }
-                }
-                .pickerStyle(.menu)
-            }
-
-            Divider().padding(.vertical, 4)
-
-            // MARK: - Logging
-            Text("Logging")
-                .font(.headline)
-
-            Toggle("Log HUD data", isOn: $settings.logEnabled)
-                .toggleStyle(.checkbox)
-            Toggle("Log shader compilation", isOn: $settings.logShaderEnabled)
-                .toggleStyle(.checkbox)
-
-            Text("Writes to the unified log. Read with:\nlog stream --predicate 'eventMessage CONTAINS \"metal-HUD\"'")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Divider().padding(.vertical, 4)
-
-            // MARK: - Display options
-            Text("Display")
-                .font(.headline)
-
-            Toggle("Performance Insights", isOn: $settings.insightsEnabled)
-                .toggleStyle(.checkbox)
-            Toggle("Show metrics value range", isOn: $settings.showMetricsRange)
-                .toggleStyle(.checkbox)
-            Toggle("Show metrics with 0 value", isOn: $settings.showZeroMetrics)
-                .toggleStyle(.checkbox)
-            Toggle("Encoder GPU time tracking", isOn: $settings.encoderTimingEnabled)
-                .toggleStyle(.checkbox)
-            Text("Encoder timing raises the HUD's own CPU cost.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Divider().padding(.vertical, 4)
-
-            // MARK: - Launch settings
-            Toggle("Open at Login", isOn: $settings.openAtLogin)
-                .toggleStyle(.switch)
-
-            Toggle("Enable HUD on Boot", isOn: $settings.enableHUDOnBoot)
-                .toggleStyle(.switch)
-                .disabled(!settings.openAtLogin)
-                .foregroundStyle(settings.openAtLogin ? .primary : .secondary)
-
-            Divider().padding(.vertical, 4)
-
-            // MARK: - Action buttons
             HStack {
                 Button("Apply") { settings.applySettings() }
                     .buttonStyle(.borderedProminent)
@@ -223,21 +214,25 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Button("Import Apple HUD Config…") { importConfig() }
-                .buttonStyle(.borderless)
-                .font(.caption)
-
             if !settings.statusMessage.isEmpty {
                 Text(settings.statusMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.top, 4)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            Spacer()
         }
         .padding(16)
-        .frame(width: 310)
+        .frame(width: 320)
+    }
+
+    /// The author's scroll view on macOS, a plain one elsewhere.
+    @ViewBuilder
+    private func sectionScroll<C: View>(@ViewBuilder _ content: () -> C) -> some View {
+        #if os(macOS)
+        AlwaysVisibleScrollView { content() }
+        #else
+        ScrollView { content() }
+        #endif
     }
 
     // MARK: - Import
