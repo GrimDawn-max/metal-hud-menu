@@ -2,7 +2,6 @@
 // macOS 27+: public StateReporting API. macOS 26: the private QuartzCore label API DXMT uses.
 // The stat selection is read live from MetalHUDmenu's preferences (key "systemStats").
 #import <Foundation/Foundation.h>
-#import <StateReporting/StateReporting.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import <mach-o/dyld.h>
@@ -89,12 +88,33 @@ NSDictionary<NSString*,NSString*> *sample(const bool on[MetricCount]) {
 }
 
 // macOS 27+: Apple's HUD shows these under State Reporters, sorted by label.
-API_AVAILABLE(macos(27.0)) void reportModern(NSDictionary *values) {
+//
+// SRStateReporter is resolved at runtime rather than linked, so this builds
+// against an SDK that predates StateReporting.framework -- Xcode 26 has no such
+// framework, public or private, and -weak_framework cannot weak-link something
+// the SDK does not describe. The macOS 26 path below already works this way;
+// this just makes both paths consistent.
+void reportModern(NSDictionary *values) {
   static bool live=false;
-  SRStateReporter *reporter=[SRStateReporter reporterForDomain:@(kDomain)];
-  if(!values.count) { if(live) [reporter reportTransitionToStateLabel:nil stableMetadata:nil volatileMetadata:nil]; live=false; return; }
-  if(!live) [reporter reportTransitionToStateLabel:@"Live" stableMetadata:nil volatileMetadata:values];
-  else [reporter reportVolatileMetadataUpdate:values];
+  static Class cls=objc_lookUpClass("SRStateReporter");
+  if(!cls) return;
+
+  static SEL forDomain=@selector(reporterForDomain:);
+  if(![cls respondsToSelector:forDomain]) return;
+  id reporter=((id(*)(Class,SEL,id))objc_msgSend)(cls,forDomain,@(kDomain));
+  if(!reporter) return;
+
+  SEL transition=@selector(reportTransitionToStateLabel:stableMetadata:volatileMetadata:);
+  SEL update=@selector(reportVolatileMetadataUpdate:);
+  if(![reporter respondsToSelector:transition]||![reporter respondsToSelector:update]) return;
+
+  if(!values.count) {
+    if(live) ((void(*)(id,SEL,id,id,id))objc_msgSend)(reporter,transition,nil,nil,nil);
+    live=false;
+    return;
+  }
+  if(!live) ((void(*)(id,SEL,id,id,id))objc_msgSend)(reporter,transition,@"Live",nil,values);
+  else      ((void(*)(id,SEL,id))objc_msgSend)(reporter,update,values);
   live=true;
 }
 
