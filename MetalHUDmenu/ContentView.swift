@@ -70,6 +70,11 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .padding(2)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.secondary.opacity(0.55), lineWidth: 1)
+            )
 
             if tab == "Mac Stats" {
                 MacStatsView(settings: settings, helper: StatsHelper.shared)
@@ -92,7 +97,7 @@ struct ContentView: View {
             // MARK: - Presets
             Text("Presets")
                 .font(.headline)
-            VStack(alignment: .leading, spacing: 6) {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
                 presetButton("FPS Only", elements: ["fps"])
                 presetButton("Full", elements: allElements.map { $0.key })
                 presetButton("Rich", elements: ["fps", "gputime", "memory", "thermal", "shaders"])
@@ -207,11 +212,34 @@ struct ContentView: View {
 
     // MARK: - Preset Buttons
     private func presetButton(_ name: String, elements: [String]) -> some View {
-        Button(name) {
+        // .borderless renders as plain text on macOS, so these read as a list
+        // rather than controls. Bordered gives them an affordance, and the one
+        // matching the current selection is filled so the state is visible.
+        //
+        // The active preset is derived from the elements themselves rather than
+        // from selectedPreset: ticking an element by hand should stop a preset
+        // claiming to be active when it no longer is.
+        let active = settings.selectedElements == Set(elements)
+        return Button(name) {
             selectedPreset = name
             settings.selectedElements = Set(elements)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(active ? Color.accentColor.opacity(0.22) : Color.clear)
+        )
+        .overlay(
+            // An explicit stroke: the stock bordered style is barely visible
+            // against the popover's translucent background.
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(active ? Color.accentColor : Color.secondary.opacity(0.65),
+                              lineWidth: active ? 2 : 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 6))
+        .help("Set the HUD to the \(name) element selection")
     }
 }
 
