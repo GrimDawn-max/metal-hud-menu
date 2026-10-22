@@ -11,6 +11,7 @@
 #include <string>
 #include "stats/telemetry.hpp"
 #include "stats/power.hpp"
+#include "stats/io.hpp"
 #include "stats/usage.hpp"
 
 namespace {
@@ -18,9 +19,9 @@ constexpr const char *kDomain="Mac Stats";
 const CFStringRef kPrefsApp=CFSTR("com.Jfishin.MetalHUDmenu");
 
 // Keep in sync with HUDSettingsManager.systemStatCatalog.
-enum Metric { CPUUsage, GPUUsage, CPUTemp, GPUTemp, Fans, SystemPower, CPUPower, GPUPower, Swap, Free, Inactive, Thermal, MetricCount };
-constexpr const char *names[]={"cpuusage","gpuusage","cputemp","gputemp","fans","systempower","cpupower","gpupower","swap","free","inactive","thermal"};
-constexpr const char *labels[]={"CPU usage","GPU usage","CPU temperature","GPU temperature","Fans","System power","CPU power est.","GPU power","Swap used","Free RAM","Free + inactive RAM","Thermal pressure"};
+enum Metric { CPUUsage, CPUTemp, CPUPower, ECorePower, PCorePower, GPUUsage, GPUTemp, GPUPower, Fans, SystemPower, Thermal, Free, Inactive, Swap, DiskRead, DiskWrite, ExtDiskRead, ExtDiskWrite, NetDown, NetUp, WifiDown, WifiUp, EthDown, EthUp, MetricCount };
+constexpr const char *names[]={"cpuusage","cputemp","cpupower","ecorepower","pcorepower","gpuusage","gputemp","gpupower","fans","systempower","thermal","free","inactive","swap","diskread","diskwrite","extdiskread","extdiskwrite","netdown","netup","wifidown","wifiup","ethdown","ethup"};
+constexpr const char *labels[]={"CPU usage","CPU temperature","CPU power est.","E-core power","P-core power","GPU usage","GPU temperature","GPU power","Fans","System power","Thermal pressure","Free RAM","Free + inactive RAM","Swap used","Disk read","Disk write","Ext disk read","Ext disk write","Network down","Network up","Wi-Fi down","Wi-Fi up","Ethernet down","Ethernet up"};
 std::atomic_flag started=ATOMIC_FLAG_INIT;
 dispatch_source_t timer;
 bool debug=false;
@@ -64,15 +65,70 @@ NSDictionary<NSString*,NSString*> *sample(const bool on[MetricCount]) {
     for(size_t i=0;i<f.fans.size();i++)
       out[[NSString stringWithFormat:@"Fan %zu",i+1]]=f.fans[i].actual?fmt("%.0f RPM",f.fans[i].rpm):@"Unavailable";
   }
-  if(on[CPUPower]||on[GPUPower]||on[SystemPower]) {
+  if(on[CPUPower]||on[GPUPower]||on[SystemPower]||on[ECorePower]||on[PCorePower]) {
     static hudstats::power::Sampler s;
-    auto v=s.read(on[CPUPower],on[GPUPower],on[SystemPower]);
+    auto v=s.read(on[CPUPower],on[GPUPower],on[SystemPower],on[ECorePower]||on[PCorePower]);
     auto watts=[&](Metric m,hudstats::power::Reading r,const char *f) {
       out[@(labels[m])]=r.status==hudstats::power::Status::Ready?fmt(f,r.watts):r.status==hudstats::power::Status::Sampling?@"Sampling...":@"Unavailable";
     };
     if(on[SystemPower]) watts(SystemPower,v.system,"%.1f W");
     if(on[CPUPower]) watts(CPUPower,v.cpu,"~%.1f W");
+    // Measured as an exact split of the package figure; see Kind::ECore.
+    if(on[ECorePower]) watts(ECorePower,v.ecore,"%.2f W");
+    if(on[PCorePower]) watts(PCorePower,v.pcore,"%.2f W");
     if(on[GPUPower]) watts(GPUPower,v.gpu,"%.1f W");
+  }
+  if(on[NetDown]||on[NetUp]||on[WifiDown]||on[WifiUp]||on[EthDown]||on[EthUp]||on[DiskRead]||on[DiskWrite]||on[ExtDiskRead]||on[ExtDiskWrite]) {
+    static hudstats::io::Sampler io;
+    // Three scales, so the number stays short at any speed: network idles in
+    // the tens of KB/s, while an internal SSD reaches several GB/s and 10GbE
+    // is over 1 GB/s. Without the top tier those read as "5120.0 MB/s".
+    static const double KB=1024.0, MB=1048576.0, GB=1073741824.0;
+    auto scaleFor=[](double peak)->std::pair<double,const char*>{
+      if(peak>=GB) return {GB,"GB/s"};
+      if(peak>=MB) return {MB,"MB/s"};
+      return {KB,"KB/s"};
+    };
+    // Precision follows the unit so the digit count stays roughly constant and
+    // no resolution is thrown away: KB/s runs to thousands so decimals are
+    // pointless, while at GB/s one decimal would hide 50 MB/s steps.
+    auto places=[](double div)->int{ return div==KB?0:div==MB?1:2; };
+    auto rate=[&](double bps)->NSString*{
+      auto [div,unit]=scaleFor(bps);
+      return [NSString stringWithFormat:@"%.*f %s",places(div),bps/div,unit];
+    };
+    // A pair shares one scale, chosen from the larger side, so the two numbers
+    // can be compared directly rather than being in different units.
+    auto pairRate=[&](double a,double b)->NSString*{
+      auto [div,unit]=scaleFor(a>b?a:b);
+      int p=places(div);
+      return [NSString stringWithFormat:@"%.*f/%.*f %s",p,a/div,p,b/div,unit];
+    };
+    auto mb=[&](Metric m,double bps,hudstats::io::Status st){
+      out[@(labels[m])]=st==hudstats::io::Status::Ready?rate(bps)
+                       :st==hudstats::io::Status::Sampling?@"Sampling...":@"Unavailable";
+    };
+    // Directional pairs share a row: two numbers on one line reads better than
+    // two near-identical labels, and halves the height of the block.
+    auto duo=[&](Metric a,Metric b,NSString *both,double x,double y,hudstats::io::Status st){
+      if(on[a]&&on[b]) {
+        out[both]=st==hudstats::io::Status::Ready?pairRate(x,y)
+          :st==hudstats::io::Status::Sampling?@"Sampling...":@"Unavailable";
+      } else {
+        if(on[a]) mb(a,x,st);
+        if(on[b]) mb(b,y,st);
+      }
+    };
+    if(on[NetDown]||on[NetUp]) { auto n=io.network();
+      duo(NetDown,NetUp,@"Network D/U",n.readBps,n.writeBps,n.status); }
+    if(on[WifiDown]||on[WifiUp]) { auto n=io.network(hudstats::io::detail::Link::WiFi);
+      duo(WifiDown,WifiUp,@"Wi-Fi D/U",n.readBps,n.writeBps,n.status); }
+    if(on[EthDown]||on[EthUp]) { auto n=io.network(hudstats::io::detail::Link::Ethernet);
+      duo(EthDown,EthUp,@"Ethernet D/U",n.readBps,n.writeBps,n.status); }
+    if(on[DiskRead]||on[DiskWrite]) { auto d=io.storage(false);
+      duo(DiskRead,DiskWrite,@"Disk R/W",d.readBps,d.writeBps,d.status); }
+    if(on[ExtDiskRead]||on[ExtDiskWrite]) { auto d=io.storage(true);
+      duo(ExtDiskRead,ExtDiskWrite,@"Ext disk R/W",d.readBps,d.writeBps,d.status); }
   }
   if(on[Swap]||on[Free]||on[Inactive]) {
     auto m=hudstats::readMemory();
@@ -127,7 +183,29 @@ void reportLegacy(NSDictionary<NSString*,NSString*> *values) {
   if(Class cls=objc_lookUpClass("_CADeveloperHUDProperties"); cls && [cls respondsToSelector:@selector(instance)])
     hud=((id(*)(id,SEL))objc_msgSend)(cls,@selector(instance));
   if(!hud||![hud respondsToSelector:@selector(addLabel:after:)]||![hud respondsToSelector:@selector(updateLabel:value:)]||![hud respondsToSelector:@selector(remove:)]) return;
-  NSArray *keys=[values.allKeys sortedArrayUsingSelector:@selector(compare:)];
+  // Group by subsystem rather than alphabetically. Sorting by label scatters
+  // related rows -- "E-core power" lands between "Disk write" and "Ethernet
+  // down" -- which makes a long list hard to read. labels[] is already in a
+  // sensible order, so rank by that and fall back to alphabetical for anything
+  // not in the table (the per-fan rows, which are generated).
+  NSArray *keys=[values.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *a,NSString *b){
+    auto rank=[](NSString *label)->NSInteger{
+      for(NSInteger i=0;i<MetricCount;i++)
+        if([label isEqualToString:@(labels[i])]) return i;
+      // Fan rows sit with Fans; everything unknown goes last.
+      if([label hasPrefix:@"Fan "]) return Fans;
+      // Combined rows rank where their first component would.
+      if([label isEqualToString:@"Disk R/W"]) return DiskRead;
+      if([label isEqualToString:@"Ext disk R/W"]) return ExtDiskRead;
+      if([label isEqualToString:@"Network D/U"]) return NetDown;
+      if([label isEqualToString:@"Wi-Fi D/U"]) return WifiDown;
+      if([label isEqualToString:@"Ethernet D/U"]) return EthDown;
+      return MetricCount;
+    };
+    NSInteger ra=rank(a), rb=rank(b);
+    if(ra!=rb) return ra<rb?NSOrderedAscending:NSOrderedDescending;
+    return [a compare:b];
+  }];
   NSMutableArray *ids=[NSMutableArray array];
   for(NSString *key in keys) [ids addObject:[@"MetalHUDmenu." stringByAppendingString:key]];
   if(![ids isEqualToArray:shown]) {
@@ -136,8 +214,17 @@ void reportLegacy(NSDictionary<NSString*,NSString*> *values) {
     for(NSString *label in ids) { ((BOOL(*)(id,SEL,id,id))objc_msgSend)(hud,@selector(addLabel:after:),label,after); after=label; }
     shown=ids;
   }
-  for(NSUInteger i=0;i<keys.count;i++)
-    ((void(*)(id,SEL,id,id))objc_msgSend)(hud,@selector(updateLabel:value:),ids[i],[NSString stringWithFormat:@"%@  %@",keys[i],values[keys[i]]]);
+  // The HUD right-aligns only the value (the unit), so the number lives in the
+  // left-hand text and lands wherever the label name ends. Padding every name
+  // to the widest in the current set puts all the numbers in one column; the
+  // HUD font is monospace, so spaces are exact.
+  NSUInteger widest=0;
+  for(NSString *key in keys) widest=MAX(widest,key.length);
+  for(NSUInteger i=0;i<keys.count;i++) {
+    NSString *padded=[keys[i] stringByPaddingToLength:widest withString:@" " startingAtIndex:0];
+    ((void(*)(id,SEL,id,id))objc_msgSend)(hud,@selector(updateLabel:value:),ids[i],
+      [NSString stringWithFormat:@"%@  %@",padded,values[keys[i]]]);
+  }
 }
 
 void tick() { @autoreleasepool {

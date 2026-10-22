@@ -18,7 +18,7 @@
 namespace hudstats::power {
 enum class Status { Unavailable, Sampling, Ready };
 struct Reading { Status status=Status::Unavailable; double watts=0; };
-struct Values { Reading cpu,gpu,system; };
+struct Values { Reading cpu,gpu,system,ecore,pcore; };
 
 namespace detail {
 using CopyGroup=CFDictionaryRef(*)(CFStringRef,CFStringRef,uint64_t,uint64_t,uint64_t);
@@ -90,7 +90,23 @@ inline CFStringRef cfString(const char *text) {
 struct Meta { std::string group,name,unit; };
 
 class Group {
+public:
+  // CPURail    : per-cluster rails in PMP/Energy (EACC*, PACC*, MACC*)
+  // CPUPackage : the aggregate "CPU Energy" channel in Energy Model. Used when
+  //              PMP/Energy is absent -- on M1 Max there is no "Energy"
+  //              subgroup under PMP at all (its subgroups are EACC0, PACC0,
+  //              PACC1, Power and bandwidth counters), so the rail scan finds
+  //              nothing and CPU power reports Unavailable.
+  // GPU        : the "GPU Energy" channel in Energy Model.
+  // ECore/PCore: the cluster aggregates EACC_CPU and PACC*_CPU. Measured, these
+  // sum to exactly the package "CPU Energy" figure (100% at idle and under
+  // load), so they are a true decomposition. Note the similarly named *_CPM
+  // channels are NOT cluster power -- they come to 4-24% of the package and
+  // represent something else.
+  enum class Kind { CPURail, CPUPackage, GPU, ECore, PCore };
+private:
   const char *groupName;
+  Kind kind;
   bool cpu;
   bool attempted=false, active=false, failed=false;
   CFMutableDictionaryRef selected=nullptr;
@@ -100,14 +116,14 @@ class Group {
   std::chrono::steady_clock::time_point previousAt{};
   std::vector<Meta> metadata;
 public:
-  Group(const char *name,bool isCPU):groupName(name),cpu(isCPU) {}
+  Group(const char *name,Kind k):groupName(name),kind(k),cpu(k==Kind::CPURail) {}
   bool isActive() const { return active; }
   bool isFailed() const { return failed; }
   void initialize(const API &api) {
     if(attempted) return;
     attempted=true;
     CFStringRef groupString=cfString(groupName);
-    CFDictionaryRef found=api.copyGroup(groupString,cpu?CFSTR("Energy"):nullptr,0,0,0);
+    CFDictionaryRef found=api.copyGroup(groupString,kind==Kind::CPURail?CFSTR("Energy"):nullptr,0,0,0);
     CFRelease(groupString);
     CFArrayRef available=channels(found);
     if(!available) { if(found) CFRelease(found); return; }
@@ -119,8 +135,23 @@ public:
       std::string subgroup=string(api.subgroup(item));
       std::string name=string(api.name(item));
       std::string unit=string(api.unit(item));
-      bool match=cpu ? (actualGroup==groupName&&subgroup=="Energy"&&cpuRail(name))
-                     : (actualGroup=="Energy Model"&&name=="GPU Energy"&&(unit=="mJ"||unit=="uJ"||unit=="nJ"));
+      bool energyUnit=(unit=="mJ"||unit=="uJ"||unit=="nJ");
+      bool match=false;
+      switch(kind) {
+        case Kind::CPURail:
+          match=(actualGroup==groupName&&subgroup=="Energy"&&cpuRail(name)); break;
+        case Kind::CPUPackage:
+          match=(actualGroup=="Energy Model"&&name=="CPU Energy"&&energyUnit); break;
+        case Kind::GPU:
+          match=(actualGroup=="Energy Model"&&name=="GPU Energy"&&energyUnit); break;
+        case Kind::ECore:
+          match=(actualGroup=="Energy Model"&&name=="EACC_CPU"&&energyUnit); break;
+        case Kind::PCore:
+          // Two performance clusters on this class of chip; both are summed.
+          match=(actualGroup=="Energy Model"&&energyUnit&&
+                 name.rfind("PACC",0)==0&&name.size()>5&&
+                 name.compare(name.size()-4,4,"_CPU")==0); break;
+      }
       if(!match||!seen.insert(actualGroup+"/"+name).second) continue;
       CFArrayAppendValue(chosen,item);
       metadata.push_back({actualGroup,name,unit});
@@ -214,21 +245,30 @@ inline Reading systemPower() {
 class Sampler {
   bool apiAttempted=false;
   detail::API api{};
-  detail::Group cpuGroup{"PMP",true};
-  detail::Group gpuGroup{"Energy Model",false};
+  detail::Group cpuGroup{"PMP",detail::Group::Kind::CPURail};
+  // Fallback for machines with no PMP/Energy subgroup; see Kind::CPUPackage.
+  detail::Group cpuPackageGroup{"Energy Model",detail::Group::Kind::CPUPackage};
+  detail::Group gpuGroup{"Energy Model",detail::Group::Kind::GPU};
+  detail::Group eCoreGroup{"Energy Model",detail::Group::Kind::ECore};
+  detail::Group pCoreGroup{"Energy Model",detail::Group::Kind::PCore};
   bool ensureAPI() {
     if(!apiAttempted) { api=detail::loadAPI(); apiAttempted=true; }
     return api.valid();
   }
 public:
-  Values read(bool cpu,bool gpu,bool system) {
+  Values read(bool cpu,bool gpu,bool system,bool cores=false) {
     Values result;
     if(system) result.system=detail::systemPower();
-    if(!(cpu||gpu)||!ensureAPI()) return result;
+    if(!(cpu||gpu||cores)||!ensureAPI()) return result;
     if(cpu) {
       result.cpu=cpuGroup.read(api);
+      // The rail scan reports Unavailable when PMP/Energy does not exist. Fall
+      // back to the package-level channel rather than showing nothing.
+      if(result.cpu.status==Status::Unavailable)
+        result.cpu=cpuPackageGroup.read(api);
     }
     if(gpu) result.gpu=gpuGroup.read(api);
+    if(cores) { result.ecore=eCoreGroup.read(api); result.pcore=pCoreGroup.read(api); }
     return result;
   }
 };
