@@ -60,8 +60,7 @@ MTL_HUD_SHOW_ZERO_METRICS
 ## Install
 
 **This repository publishes no releases.** It is a working copy of
-[Jfishin/MetalHUDmenu](https://github.com/Jfishin/MetalHUDmenu), kept to carry
-the changes described in [MTL_HUD_ELEMENTS.md](MTL_HUD_ELEMENTS.md). For a
+[Jfishin/MetalHUDmenu](https://github.com/Jfishin/MetalHUDmenu). For a
 ready-built app, use
 [upstream's releases](https://github.com/Jfishin/MetalHUDmenu/releases).
 
