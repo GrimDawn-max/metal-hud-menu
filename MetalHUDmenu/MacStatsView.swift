@@ -32,7 +32,9 @@ struct MacStatsView: View {
             Text("Mac stats in Apple's HUD")
                 .font(.headline)
             Text("Pick once. Games that are already running update within a second.")
-                .font(.caption)
+                // Explicit size: .caption is 10pt on macOS, too small to read
+                // comfortably as the instruction for the whole tab.
+                .font(.system(size: 15))
                 .foregroundStyle(.secondary)
 
             // Grouped by subsystem: a flat list of 24 checkboxes is hard to

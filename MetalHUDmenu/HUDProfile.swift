@@ -67,7 +67,9 @@ struct HUDProfile: Codable {
 
 enum HUDProfileIO {
     static let fileType = UTType.json
-    static let defaultName = "MetalHUDmenu Profile.json"
+    /// A starting point only — the panel is editable, and profiles are
+    /// per-game, so the name matters.
+    static let defaultName = "HUD profile.json"
 
     static func encode(_ profile: HUDProfile) throws -> Data {
         let encoder = JSONEncoder()
@@ -93,10 +95,19 @@ enum HUDProfileIO {
     /// throwing dialogs around.
     @MainActor
     static func exportProfile(from settings: HUDSettingsManager) -> String {
+        // LSUIElement means the app is not active when the panel opens, so the
+        // name field never takes keyboard focus and the name looks fixed.
+        // Activating first is what makes it editable.
+        NSApp.activate(ignoringOtherApps: true)
+
         let panel = NSSavePanel()
         panel.allowedContentTypes = [fileType]
         panel.nameFieldStringValue = defaultName
+        panel.nameFieldLabel = "Save profile as:"
         panel.title = "Export HUD profile"
+        panel.message = "Name it after the game or the set of metrics — one profile per game works well."
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
         guard panel.runModal() == .OK, let url = panel.url else { return "" }
         do {
             try encode(HUDProfile(from: settings)).write(to: url)
@@ -108,6 +119,8 @@ enum HUDProfileIO {
 
     @MainActor
     static func importProfile(into settings: HUDSettingsManager) -> String {
+        NSApp.activate(ignoringOtherApps: true)
+
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [fileType]
         panel.allowsMultipleSelection = false

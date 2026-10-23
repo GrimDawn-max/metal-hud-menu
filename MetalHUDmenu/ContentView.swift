@@ -83,7 +83,9 @@ struct ContentView: View {
             }
         }
         .padding(16)
-        .frame(width: 310)
+        // 310 was too narrow once the Mac stats tab grew to 24 metrics in a
+        // two-column grid — the labels wrapped and the groups looked squashed.
+        .frame(width: 400)
     }
 
     private var hudTab: some View {
