@@ -5,6 +5,8 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import <mach-o/dyld.h>
+#include <os/log.h>
+#include <dlfcn.h>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -15,6 +17,21 @@
 #include "stats/usage.hpp"
 
 namespace {
+// Diagnostics through os_log, not stderr.
+//
+// A game started by LaunchServices has nowhere for stderr to go, so MHUD_DEBUG
+// said nothing about the one case that matters. These lines are readable
+// whatever starts the process:
+//
+//   log stream --style compact --predicate 'subsystem == "local.mhudstats"'
+//
+// Lifecycle only -- a handful of lines per process, not per frame.
+os_log_t mlog() {
+  static os_log_t l=os_log_create("local.mhudstats","diag");
+  return l;
+}
+#define MHUD_LOG(fmt,...) os_log(mlog(),fmt,##__VA_ARGS__)
+
 constexpr const char *kDomain="Mac Stats";
 const CFStringRef kPrefsApp=CFSTR("com.Jfishin.MetalHUDmenu");
 
@@ -40,6 +57,17 @@ void readSelection(bool enabled[MetricCount]) {
     if(![item isKindOfClass:NSString.class]) continue;
     NSString *word=[item stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
     for(int i=0;i<MetricCount;i++) if([word isEqualToString:@(names[i])]) enabled[i]=true;
+  }
+  // Logged once: an empty selection yields no rows and looks identical to a
+  // dylib that never ran.
+  static bool told=false;
+  if(!told) {
+    told=true;
+    int n=0; for(int i=0;i<MetricCount;i++) if(enabled[i]) n++;
+    MHUD_LOG("selection: %d of %d metrics, from %{public}s, list had %lu entries",
+             n, (int)MetricCount,
+             getenv("MHUD_SYSTEM_ELEMENTS") ? "the environment" : "preferences",
+             (unsigned long)list.count);
   }
 }
 
@@ -174,14 +202,130 @@ void reportModern(NSDictionary *values) {
   live=true;
 }
 
+// Keeping our rows when another writer takes them away.
+//
+// A translated DX12 game runs Apple's D3DMetal (x86_64 only), which drives
+// this same private HUD API: it carries `_CADeveloperHUDProperties`,
+// `addLabel:after:`, `updateLabel:value:`, `remove:` and the same
+// `com.apple.hud-graph.default` anchor used here. It is present in exactly the
+// process where these rows disappear and absent from a native app, where they
+// survive -- and it is the only writer found that *removes* labels.
+//
+// So refuse to let our own ids be removed, and say who tried. Only ids with
+// our prefix are protected: another writer's own rows are passed straight
+// through, so nothing it manages is affected.
+NSString *const kLabelPrefix=@"MetalHUDmenu.";
+
+const char *callerImage(void *addr) {
+  Dl_info info;
+  if(dladdr(addr,&info)&&info.dli_fname) {
+    const char *b=strrchr(info.dli_fname,'/');
+    return b?b+1:info.dli_fname;
+  }
+  return "(unknown)";
+}
+
+void (*origRemove)(id,SEL,id)=nullptr;
+BOOL (*origAddLabel)(id,SEL,id,id)=nullptr;
+
+void removeHook(id self,SEL sel,id label) {
+  if([label isKindOfClass:NSString.class]&&[(NSString*)label hasPrefix:kLabelPrefix]) {
+    static bool told=false;
+    if(!told) {
+      told=true;
+      MHUD_LOG("hook: %{public}s tried to remove %{public}s -- refused",
+               callerImage(__builtin_return_address(0)),[(NSString*)label UTF8String]);
+    }
+    return;
+  }
+  if(origRemove) origRemove(self,sel,label);
+}
+
+// Not a fix, a witness: whether anything else adds rows in this process
+// settles whether added labels render here at all.
+BOOL addLabelHook(id self,SEL sel,id label,id after) {
+  if(!([label isKindOfClass:NSString.class]&&[(NSString*)label hasPrefix:kLabelPrefix])) {
+    static const char *seen=nullptr;
+    const char *who=callerImage(__builtin_return_address(0));
+    if(!seen||strcmp(seen,who)) {
+      seen=who;
+      MHUD_LOG("hook: %{public}s adds its own row %{public}s",
+               who,[label isKindOfClass:NSString.class]?[(NSString*)label UTF8String]:"(not a string)");
+    }
+  }
+  return origAddLabel?origAddLabel(self,sel,label,after):NO;
+}
+
+// Called from every tick, not once at startup: the class is created as part of
+// Apple's HUD setup, which happens after the add-image callback that starts
+// the timer, so a single attempt there always finds it absent.
+void installLabelHooks() {
+  if(origRemove) return;
+  Class cls=objc_lookUpClass("_CADeveloperHUDProperties");
+  if(!cls) return;
+  // The return type is spelled differently per architecture -- BOOL is "B" on
+  // arm64 and "c" (signed char) on x86_64 -- so match the accepted return
+  // characters and the argument list separately. Comparing the whole encoding
+  // silently disabled the hook in translated processes, the one place it is
+  // needed.
+  struct { const char *sel; void **slot; IMP repl; const char *rets; const char *args; } want[]={
+    {"remove:",        (void**)&origRemove,   (IMP)removeHook,   "v",  "24@0:8@16"},
+    {"addLabel:after:",(void**)&origAddLabel, (IMP)addLabelHook, "Bc", "32@0:8@16@24"},
+  };
+  for(auto &w:want) {
+    Method m=class_getInstanceMethod(cls,sel_registerName(w.sel));
+    if(!m) { MHUD_LOG("hook: %{public}s not found", w.sel); continue; }
+    // The return type is not documented. A BOOL-returning replacement is safe
+    // over a void original (the caller ignores the register); the reverse is
+    // not, so bail on anything unexpected rather than guess.
+    // Measured: remove: is v24@0:8@16, addLabel:after: is B32@0:8@16@24.
+    // Anything else is a different method than the one these hooks match, so
+    // leave it alone rather than call through a wrong signature.
+    const char *enc=method_getTypeEncoding(m);
+    if(!enc||!strchr(w.rets,enc[0])||strcmp(enc+1,w.args)) {
+      MHUD_LOG("hook: %{public}s signature is %{public}s, expected [%{public}s]%{public}s -- left alone",
+               w.sel, enc?:"(none)", w.rets, w.args);
+      continue;
+    }
+    *w.slot=(void*)method_getImplementation(m);
+    method_setImplementation(m,w.repl);
+    MHUD_LOG("hook: %{public}s installed (signature %{public}s)", w.sel, enc?:"?");
+  }
+}
+
 // macOS 26: one HUD line per stat via _CADeveloperHUDProperties (addLabel:after:, updateLabel:value:, remove:),
 // the same calls DXMT makes. These methods are gone on 27, so every call is guarded.
 // ponytail: untested on a macOS 26 machine; verify layout and threading there.
 void reportLegacy(NSDictionary<NSString*,NSString*> *values) {
   static NSArray<NSString*> *shown=@[];
+  // A process can build the HUD more than once -- a game launcher draws with
+  // Metal before the game's own layer exists, and the second HUD knows nothing
+  // of the labels added to the first. updateLabel: on a label the current HUD
+  // has never seen does nothing and reports nothing, so caching the added set
+  // forever means the rows vanish the moment the HUD is rebuilt. Re-adding
+  // every few seconds costs nothing and survives that.
+  static unsigned long reports=0;
+  if(++reports%5==0) shown=@[];
   id hud=nil;
+  static bool toldHud=false;
+  if(!toldHud) {
+    toldHud=true;
+    Class probe=objc_lookUpClass("_CADeveloperHUDProperties");
+    MHUD_LOG("legacy path: _CADeveloperHUDProperties %{public}s, responds to instance: %{public}s",
+             probe ? "found" : "MISSING",
+             (probe && [probe respondsToSelector:@selector(instance)]) ? "yes" : "no");
+  }
   if(Class cls=objc_lookUpClass("_CADeveloperHUDProperties"); cls && [cls respondsToSelector:@selector(instance)])
     hud=((id(*)(id,SEL))objc_msgSend)(cls,@selector(instance));
+  static bool toldInstance=false;
+  if(!toldInstance) {
+    toldInstance=true;
+    MHUD_LOG("legacy path: instance %{public}s, addLabel:after: %{public}s, updateLabel:value: %{public}s, remove: %{public}s",
+             hud ? object_getClassName(hud) : "nil",
+             (hud && [hud respondsToSelector:@selector(addLabel:after:)]) ? "yes" : "no",
+             (hud && [hud respondsToSelector:@selector(updateLabel:value:)]) ? "yes" : "no",
+             (hud && [hud respondsToSelector:@selector(remove:)]) ? "yes" : "no");
+  }
   if(!hud||![hud respondsToSelector:@selector(addLabel:after:)]||![hud respondsToSelector:@selector(updateLabel:value:)]||![hud respondsToSelector:@selector(remove:)]) return;
   // Group by subsystem rather than alphabetically. Sorting by label scatters
   // related rows -- "E-core power" lands between "Disk write" and "Ethernet
@@ -211,7 +355,20 @@ void reportLegacy(NSDictionary<NSString*,NSString*> *values) {
   if(![ids isEqualToArray:shown]) {
     for(NSString *label in shown) ((void(*)(id,SEL,id))objc_msgSend)(hud,@selector(remove:),label);
     NSString *after=@"com.apple.hud-graph.default";
-    for(NSString *label in ids) { ((BOOL(*)(id,SEL,id,id))objc_msgSend)(hud,@selector(addLabel:after:),label,after); after=label; }
+    NSUInteger yes=0,no=0; NSString *firstNo=nil;
+    for(NSString *label in ids) {
+      BOOL ok=((BOOL(*)(id,SEL,id,id))objc_msgSend)(hud,@selector(addLabel:after:),label,after);
+      if(!ok) {
+        // The anchor row may not exist in this process (a translated game's HUD
+        // carries a different set), so the insert is refused. Retry unanchored.
+        ok=((BOOL(*)(id,SEL,id,id))objc_msgSend)(hud,@selector(addLabel:after:),label,(id)nil);
+      }
+      if(ok) yes++; else { no++; if(!firstNo) firstNo=label; }
+      after=label;
+    }
+    MHUD_LOG("legacy path: report %lu, addLabel accepted %lu, refused %lu%{public}s",
+             reports,(unsigned long)yes,(unsigned long)no,
+             firstNo ? [[@", first refused: " stringByAppendingString:firstNo] UTF8String] : "");
     shown=ids;
   }
   // The HUD right-aligns only the value (the unit), so the number lives in the
@@ -228,8 +385,17 @@ void reportLegacy(NSDictionary<NSString*,NSString*> *values) {
 }
 
 void tick() { @autoreleasepool {
+  static unsigned long ticks=0;
+  if(++ticks==1||ticks%60==0) MHUD_LOG("tick %lu", ticks);
+  installLabelHooks();
   bool on[MetricCount]; readSelection(on);
   NSDictionary *values=sample(on);
+  static bool toldPath=false;
+  if(!toldPath) {
+    toldPath=true;
+    if(@available(macOS 27.0,*)) MHUD_LOG("reporting via the macOS 27 StateReporting path");
+    else                          MHUD_LOG("reporting via the macOS 26 legacy label path");
+  }
   if(@available(macOS 27.0,*)) reportModern(values); else reportLegacy(values);
   if(debug) fprintf(stderr,"MHUD_STATS %s\n",values.description.UTF8String);
 } }
@@ -240,12 +406,15 @@ void imageAdded(const mach_header *header,intptr_t) {
   for(uint32_t i=0,n=_dyld_image_count();i<n;i++) if(_dyld_get_image_header(i)==header) { name=_dyld_get_image_name(i); break; }
   if(!name) return;
   const char *base=strrchr(name,'/'); base=base?base+1:name;
+  if(strstr(base,"MTLHud")||strstr(base,"MTLHUD"))
+    MHUD_LOG("image seen: %{public}s", name);
   if(strcmp(base,"libMTLHud.dylib")!=0||started.test_and_set()) return;
   timer=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,dispatch_queue_create("MetalHUDmenu.stats",DISPATCH_QUEUE_SERIAL));
   dispatch_source_set_timer(timer,DISPATCH_TIME_NOW,NSEC_PER_SEC,NSEC_PER_SEC/10);
   dispatch_source_set_event_handler(timer,^{ tick(); });
   dispatch_resume(timer);
   if(debug) fprintf(stderr,"MHUD_STATS_STARTED %s\n",name);
+  MHUD_LOG("timer started on %{public}s", name);
 }
 
 // Append a token to a comma-separated env var unless it is already there.
@@ -260,10 +429,32 @@ void appendEnv(const char *key,const char *token) {
 
 __attribute__((constructor)) static void start() {
   debug=getenv("MHUD_DEBUG")&&!strcmp(getenv("MHUD_DEBUG"),"1");
+  { char exe[4096]; uint32_t sz=sizeof exe; if(_NSGetExecutablePath(exe,&sz)!=0) strcpy(exe,"?");
+    MHUD_LOG("constructor: pid %d, exe %{public}s, images %u, MHUD_SYSTEM_ELEMENTS=%{public}s",
+             getpid(), exe, _dyld_image_count(),
+             getenv("MHUD_SYSTEM_ELEMENTS") ?: "(unset)"); }
+  // MTL_HUD_ELEMENTS is an allow-list of element names, and rows added through
+  // addLabel:after: are not in it under any spelling -- adding our own ids, or
+  // "user", or MTL_HUD_EXTRA_ELEMENTS, all still render nothing. While it is
+  // set, Apple's HUD draws its own stats and silently drops every added label.
+  //
+  // It only matters for a game started by LaunchServices: the HUD's own panel
+  // writes it into the launchd session, so a terminal-launched app usually
+  // does not have it, which is why this went unnoticed for so long. Clearing
+  // it here works because this constructor runs when the dylib is inserted,
+  // and Apple's HUD reads the variable later, when the Metal device is made.
+  //
+  // The default element set is very close to what the panel writes anyway, so
+  // little is lost; the alternative is custom rows that never appear.
+  if(const char *el=getenv("MTL_HUD_ELEMENTS")) {
+    MHUD_LOG("clearing MTL_HUD_ELEMENTS (%{public}s) -- it hides every added row", el);
+    unsetenv("MTL_HUD_ELEMENTS");
+  }
   // Adds the State Reporters section on top of the user's own HUD rows (read when Apple's HUD loads).
   if(@available(macOS 27.0,*)) {
     appendEnv("MTL_HUD_EXTRA_ELEMENTS","statereporter");
     appendEnv("MTL_HUD_STATE_REPORTER_DOMAINS",kDomain);
   }
   _dyld_register_func_for_add_image(imageAdded);
+  MHUD_LOG("constructor: add-image callback registered");
 }
