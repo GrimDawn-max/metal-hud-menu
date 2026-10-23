@@ -1,0 +1,29 @@
+--- a/NativeHUD/mhud_stats.mm
++++ b/NativeHUD/mhud_stats.mm
+@@ -432,6 +432,26 @@
+   debug=getenv("MHUD_DEBUG")&&!strcmp(getenv("MHUD_DEBUG"),"1");
+   if(debug) fprintf(stderr,"MHUD_STATS_LOADED pid=%d\n",getpid());
+   wineMilestone("helper-loaded");
++  // MTL_HUD_ELEMENTS is an allow-list of element names, and a row added through
++  // addLabel:after: is not in it under any spelling: not the label ids, not
++  // "user", not via MTL_HUD_EXTRA_ELEMENTS. While it is set to anything, Apple's
++  // HUD draws its own stats and silently drops every added label.
++  //
++  // HUDSettingsManager writes it into the launchd session and LaunchConnection
++  // writes it into each launched game's environment, so the supported launch
++  // path sets it four lines after inserting this library. Clearing it here
++  // works because this constructor runs when the library is inserted, and
++  // Apple's HUD reads the variable later, when the Metal device is created.
++  //
++  // The cost is that Apple's HUD falls back to its default element set inside
++  // apps carrying this library; the user's choice still applies everywhere
++  // else. The alternative is rows that never appear.
++  if(statsEnabled()) {
++    if(const char *elements=getenv("MTL_HUD_ELEMENTS")) {
++      if(debug) fprintf(stderr,"MHUD_STATS clearing MTL_HUD_ELEMENTS=%s\n",elements);
++      unsetenv("MTL_HUD_ELEMENTS");
++    }
++  }
+   // Adds the Custom Metrics ("client") and State Reporters sections on top of the user's own HUD rows
+   // (read when Apple's HUD loads). Rows go to Custom Metrics; State Reporters is the fallback.
+   if(@available(macOS 27.0,*)) {
