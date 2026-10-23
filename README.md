@@ -58,8 +58,19 @@ MTL_HUD_SHOW_ZERO_METRICS
 - macOS 26 (Tahoe)
 
 ## Install
-- Download the release `.zip`, extract, then:
-  -  Right-click the app → **Open** → Error message will pop up, allow through System Settings > Privacy and security and hit allow at the bottom. 
+
+**This repository publishes no releases.** It is a working copy of
+[Jfishin/MetalHUDmenu](https://github.com/Jfishin/MetalHUDmenu), kept to carry
+the changes described in [MTL_HUD_ELEMENTS.md](MTL_HUD_ELEMENTS.md). For a
+ready-built app, use
+[upstream's releases](https://github.com/Jfishin/MetalHUDmenu/releases).
+
+To build the changes here, open `MetalHUDmenu.xcodeproj` and build the
+MetalHUDmenu scheme. Then, on first launch:
+
+- Right-click the app → **Open**. An error will appear; allow it through
+  System Settings → Privacy & Security, using the button at the bottom.
+
 ## Usage
 1. Open **MetalHUDmenu**.
 2. Toggle **Enable Metal HUD**.
