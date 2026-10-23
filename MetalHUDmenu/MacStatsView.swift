@@ -178,7 +178,7 @@ struct MacStatsView: View {
                 if crossover.state == .entitlementLost {
                     Label(crossover.message, systemImage: "exclamationmark.triangle.fill")
                         .font(.callout.weight(.medium))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text(crossover.message)
@@ -186,17 +186,21 @@ struct MacStatsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                Text("Needs your password, and MetalHUDmenu must be allowed under Privacy & Security \u{203A} App Management \u{2014} macOS guards other apps' bundles even from an administrator.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text("Setting up adds one line to CrossOver's own configuration, which covers every bottle including ones made later, and adds an entitlement to CrossOver's wine loader so macOS lets the stats library load. The loader is re-signed, replacing CodeWeavers' signature; the original is kept and Revert restores it. A CrossOver update undoes the loader change, and this will say so.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 27 {
-                Text("Mac stats on macOS 26 are experimental.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            // The macOS 26 path is no longer experimental: reportLegacy and
+            // addLabel:after: were verified on 26.4.1, with every selected row
+            // appearing in four Windows games under CrossOver and in a native
+            // Metal window on both architectures. What that path needs is the
+            // MTL_HUD_ELEMENTS fix in the constructor, not a caveat here.
 
             Spacer()
         }

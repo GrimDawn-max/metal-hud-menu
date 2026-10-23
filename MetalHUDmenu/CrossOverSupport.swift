@@ -29,6 +29,7 @@
 //  checks on every launch and offers to re-apply, so the user is not left
 //  wondering why the rows stopped.
 
+import Combine
 import Foundation
 import SwiftUI
 
@@ -194,62 +195,138 @@ final class CrossOverSupport: ObservableObject {
         return nil
     }
 
-    /// Keeps the original, adds the entitlement, re-signs. Everything that
-    /// needs root happens in one privileged shell command so the user is asked
-    /// for their password once rather than per step.
+    /// Keeps the original, adds the entitlement, re-signs.
+    ///
+    /// Signing happens on a copy in the temporary directory, as this app, for
+    /// two reasons learned the hard way. codesign run through "do shell script
+    /// with administrator privileges" fails with "internal error in Code
+    /// Signing subsystem", because root there has no Security session. And the
+    /// privileged copy is refused anyway: macOS App Management guards another
+    /// app's bundle, and the check is on the calling process, not on being
+    /// root. CrossOver's loader is normally owned by the user who installed it,
+    /// so no elevation is needed at all -- only the App Management grant.
     private func entitleLoader(_ loader: URL) async -> String? {
         if loaderEntitled() { return nil }
         let fm = FileManager.default
         try? fm.createDirectory(at: backup.deletingLastPathComponent(),
                                 withIntermediateDirectories: true)
+        do { if !fm.fileExists(atPath: backup.path) {
+            try fm.copyItem(at: loader, to: backup) } }
+        catch { return "Could not keep a copy of CrossOver's original loader: \(error.localizedDescription)" }
 
-        let entitlements = NSTemporaryDirectory() + "mhud-entitlements.plist"
-        let existing = run("/usr/bin/codesign",
-                           ["-d", "--entitlements", "-", "--xml", loader.path]) ?? ""
+        let temp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("mhud-wine-loader")
+        try? fm.removeItem(at: temp)
+        do { try fm.copyItem(at: loader, to: temp) }
+        catch { return "Could not prepare the change: \(error.localizedDescription)" }
+
+        let plistPath = NSTemporaryDirectory() + "mhud-entitlements.plist"
+        let existing = run("/usr/bin/codesign", ["-d", "--entitlements", "-", "--xml", temp.path]) ?? ""
         let plist = existing.contains("<plist") ? existing :
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><dict/></plist>"
-        try? plist.write(toFile: entitlements, atomically: true, encoding: .utf8)
-        _ = run("/usr/libexec/PlistBuddy", ["-c", "Add :\(entitlement) bool true", entitlements])
-        _ = run("/usr/libexec/PlistBuddy", ["-c", "Set :\(entitlement) true", entitlements])
+        try? plist.write(toFile: plistPath, atomically: true, encoding: .utf8)
+        _ = run("/usr/libexec/PlistBuddy", ["-c", "Add :\(entitlement) bool true", plistPath])
+        _ = run("/usr/libexec/PlistBuddy", ["-c", "Set :\(entitlement) true", plistPath])
 
-        let identifier = (run("/usr/bin/codesign", ["-dv", loader.path]) ?? "")
-            .split(separator: "\n")
-            .first { $0.hasPrefix("Identifier=") }
+        let identifier = (run("/usr/bin/codesign", ["-dv", temp.path]) ?? "")
+            .split(separator: "\n").first { $0.hasPrefix("Identifier=") }
             .map { String($0.dropFirst("Identifier=".count)) }
             ?? "com.codeweavers.CrossOver.wineloader"
 
-        let script = """
-        /bin/cp -p '\(loader.path)' '\(backup.path)' && \
-        /usr/bin/codesign --force --sign - --identifier '\(identifier)' \
-          --options runtime --entitlements '\(entitlements)' '\(loader.path)'
-        """
-        if let problem = runPrivileged(script) { return problem }
-        try? fm.removeItem(atPath: entitlements)
+        let signed = runChecked("/usr/bin/codesign",
+                                ["--force", "--sign", "-", "--identifier", identifier,
+                                 "--options", "runtime", "--entitlements", plistPath, temp.path])
+        try? fm.removeItem(atPath: plistPath)
+        guard signed.ok,
+              (run("/usr/bin/codesign", ["-d", "--entitlements", "-", "--xml", temp.path]) ?? "")
+                .contains(entitlement) else {
+            try? fm.removeItem(at: temp)
+            return signed.text.isEmpty
+                ? "Could not add the entitlement to a copy of the loader."
+                : "Could not add the entitlement: \(signed.text)"
+        }
+
+        let problem = install(temp, over: loader)
+        try? fm.removeItem(at: temp)
+        if let problem { return problem }
         return loaderEntitled() ? nil
-            : "The change did not take effect. CrossOver may have been running; quit it and try again."
+            : "The change did not take effect. Quit CrossOver and try again."
+    }
+
+    /// Replace one file with another, as this app. Falls back to asking for a
+    /// password only when the file is owned by someone else, which happens if
+    /// CrossOver was installed by a different account.
+    private func install(_ source: URL, over destination: URL) -> String? {
+        do {
+            _ = try FileManager.default.replaceItemAt(destination, withItemAt: source,
+                                                      backupItemName: nil,
+                                                      options: [.usingNewMetadataOnly])
+            return nil
+        } catch {
+            let code = (error as NSError).code
+            // EPERM here is App Management refusing, not ownership.
+            if code == NSFileWriteNoPermissionError || code == 1 {
+                if !FileManager.default.isWritableFile(atPath: destination.path) {
+                    return runPrivileged("/bin/cp -p '\(source.path)' '\(destination.path)'")
+                }
+                return "macOS blocked the change to CrossOver. Allow MetalHUDmenu under System Settings > Privacy & Security > App Management, then try again."
+            }
+            return "Could not update CrossOver's loader: \(error.localizedDescription)"
+        }
     }
 
     private func restoreLoader(_ loader: URL) async -> String? {
         guard FileManager.default.fileExists(atPath: backup.path) else {
             return "No copy of CrossOver's original loader was kept, so it cannot be restored here. Reinstalling CrossOver will restore it."
         }
-        return runPrivileged("/bin/cp -p '\(backup.path)' '\(loader.path)'")
+        let temp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("mhud-wine-loader-restore")
+        try? FileManager.default.removeItem(at: temp)
+        do { try FileManager.default.copyItem(at: backup, to: temp) }
+        catch { return "Could not prepare the restore: \(error.localizedDescription)" }
+        let problem = install(temp, over: loader)
+        try? FileManager.default.removeItem(at: temp)
+        return problem
     }
 
     // MARK: - Running things
 
+    /// Standard output only. codesign -d --entitlements prints the plist on
+    /// stdout and "Executable=..." on stderr; merging the two produced a file
+    /// that was not valid XML, so the signing step failed with nothing to
+    /// explain why. Kept separate deliberately.
     private func run(_ tool: String, _ args: [String]) -> String? {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: tool)
         task.arguments = args
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.standardError = pipe
+        let out = Pipe(), err = Pipe()
+        task.standardOutput = out
+        task.standardError = err
         do { try task.run() } catch { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        _ = err.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
         return String(data: data, encoding: .utf8)
     }
+
+    /// Same, but reporting failure, for steps where the reason matters.
+    @discardableResult
+    private func runChecked(_ tool: String, _ args: [String]) -> (ok: Bool, text: String) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: tool)
+        task.arguments = args
+        let out = Pipe(), err = Pipe()
+        task.standardOutput = out
+        task.standardError = err
+        do { try task.run() } catch { return (false, error_text(error)) }
+        let o = out.fileHandleForReading.readDataToEndOfFile()
+        let e = err.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        let text = (String(data: o, encoding: .utf8) ?? "") + (String(data: e, encoding: .utf8) ?? "")
+        return (task.terminationStatus == 0, text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func error_text(_ error: Error) -> String { error.localizedDescription }
 
     /// One password prompt, presented by macOS itself. Returns nil on success
     /// or a message to show the user.
@@ -263,7 +340,15 @@ final class CrossOverSupport: ObservableObject {
         guard let error else { return nil }
         // -128 is the user cancelling the password prompt, which is not a fault.
         if (error[NSAppleScript.errorNumber] as? Int) == -128 { return "Cancelled." }
-        return (error[NSAppleScript.errorMessage] as? String) ?? "The change could not be made."
+        let text = (error[NSAppleScript.errorMessage] as? String) ?? ""
+        // Root is not enough to write inside another application's bundle:
+        // macOS App Management guards that, and it is the *calling* process
+        // that needs the grant. Without it this fails as an opaque
+        // "Operation not permitted", which tells the user nothing at all.
+        if text.contains("not permitted") {
+            return "macOS blocked the change to CrossOver. Allow MetalHUDmenu under System Settings > Privacy & Security > App Management, then try again."
+        }
+        return text.isEmpty ? "The change could not be made." : text
     }
 }
 
