@@ -8,6 +8,7 @@ import SwiftUI
 struct MacStatsView: View {
     @ObservedObject var settings: HUDSettingsManager
     @ObservedObject var helper: StatsHelper
+    @StateObject private var crossover = CrossOverSupport()
     @State private var profileMessage = ""
     /// What to describe in the strip below the list. Hovering previews a
     /// metric; clicking one keeps its description up afterwards, since system
@@ -27,6 +28,10 @@ struct MacStatsView: View {
     }
 
     var body: some View {
+        content.onAppear { crossover.refresh() }
+    }
+
+    private var content: some View {
         ScrollView {
         VStack(alignment: .leading, spacing: 12) {
             Text("Mac stats in Apple's HUD")
@@ -153,6 +158,39 @@ struct MacStatsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if CrossOverSupport.app != nil {
+                Divider().padding(.vertical, 4)
+
+                // MARK: - CrossOver
+                HStack {
+                    Text("CrossOver").font(.headline)
+                    Spacer()
+                    switch crossover.state {
+                    case .ready:
+                        Button("Revert") { crossover.revert() }.disabled(crossover.busy)
+                    case .entitlementLost:
+                        Button("Set up again") { crossover.setUp() }.disabled(crossover.busy)
+                    default:
+                        Button("Set up") { crossover.setUp() }.disabled(crossover.busy)
+                    }
+                }
+                if crossover.state == .entitlementLost {
+                    Label(crossover.message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(crossover.message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Setting up adds one line to CrossOver's own configuration, which covers every bottle including ones made later, and adds an entitlement to CrossOver's wine loader so macOS lets the stats library load. The loader is re-signed, replacing CodeWeavers' signature; the original is kept and Revert restores it. A CrossOver update undoes the loader change, and this will say so.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 27 {
                 Text("Mac stats on macOS 26 are experimental.")
