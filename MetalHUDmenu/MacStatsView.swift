@@ -159,7 +159,7 @@ struct MacStatsView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if CrossOverSupport.app != nil {
+            if !CrossOverSupport.installs.isEmpty {
                 Divider().padding(.vertical, 4)
 
                 // MARK: - CrossOver
@@ -186,7 +186,7 @@ struct MacStatsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Text("Needs your password, and MetalHUDmenu must be allowed under Privacy & Security \u{203A} App Management \u{2014} macOS guards other apps' bundles even from an administrator.")
+                Text("MetalHUDmenu must be allowed under Privacy & Security \u{203A} App Management \u{2014} macOS guards other apps' bundles even from an administrator. A password is asked for only if CrossOver was installed by another account.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

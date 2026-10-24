@@ -28,6 +28,11 @@
 //  A CrossOver update replaces the loader and so drops the entitlement. This
 //  checks on every launch and offers to re-apply, so the user is not left
 //  wondering why the rows stopped.
+//
+//  Every installed copy is handled, not just one: CrossOver, CrossOver
+//  Preview and any beta share the config file above but each has its own
+//  loader. Copies are found by bundle identifier rather than by name, so a
+//  renamed copy or a differently named beta is still found.
 
 import Combine
 import Foundation
@@ -52,25 +57,50 @@ final class CrossOverSupport: ObservableObject {
 
     // MARK: - Paths
 
-    static var app: URL? {
-        let candidates = ["/Applications/CrossOver.app", "/Applications/CrossOver Preview.app"]
-        return candidates.map(URL.init(fileURLWithPath:)).first {
-            FileManager.default.fileExists(atPath: $0.path)
+    /// One installed copy of CrossOver.
+    struct Install {
+        let app: URL
+        var name: String { app.deletingPathExtension().lastPathComponent }
+        /// The loader that hosts Windows processes. Not bin/wineloader, and not
+        /// the hosted-application loader: measured, this is the one that matters.
+        var loader: URL {
+            app.appendingPathComponent("Contents/SharedSupport/CrossOver/lib/wine/x86_64-unix/wine")
+        }
+        /// Kept per copy, so a Preview and a release never share one.
+        var backup: URL {
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("MetalHUDmenu/crossover-wine-loader-\(name).original")
         }
     }
-    private var sharedSupport: URL? {
-        Self.app?.appendingPathComponent("Contents/SharedSupport/CrossOver")
-    }
-    /// The loader that hosts Windows processes. Not bin/wineloader, and not
-    /// the hosted-application loader: measured, this is the one that matters.
-    private var loader: URL? {
-        sharedSupport?.appendingPathComponent("lib/wine/x86_64-unix/wine")
+
+    /// Every copy in /Applications or ~/Applications whose bundle identifier is
+    /// CodeWeavers' CrossOver one (release and Preview both use
+    /// com.codeweavers.CrossOver) and which actually has the loader. Only those
+    /// two folders are searched, so a mounted installer image or a copy in the
+    /// Trash is never touched. The loader check excludes CrossOver's own helper
+    /// apps and bottle launchers.
+    static var installs: [Install] {
+        let fm = FileManager.default
+        let folders = [URL(fileURLWithPath: "/Applications"),
+                       fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications")]
+        return folders.flatMap { folder -> [Install] in
+            let items = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+            return items.filter { $0.pathExtension == "app" }.compactMap { app in
+                guard let id = Bundle(url: app)?.bundleIdentifier,
+                      id.hasPrefix("com.codeweavers.CrossOver") else { return nil }
+                let install = Install(app: app)
+                return fm.fileExists(atPath: install.loader.path) ? install : nil
+            }
+        }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
     private var config: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CrossOver/CrossOver.conf")
     }
-    private var backup: URL {
+    /// Where the single backup lived before every copy got its own. It was
+    /// always taken from /Applications/CrossOver.app when that existed.
+    private var legacyBackup: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MetalHUDmenu/crossover-wine-loader.original")
     }
@@ -81,8 +111,7 @@ final class CrossOverSupport: ObservableObject {
     // MARK: - Reading the current state
 
     /// Whether the loader will honour DYLD_INSERT_LIBRARIES.
-    private func loaderEntitled() -> Bool {
-        guard let loader else { return false }
+    private func loaderEntitled(_ loader: URL) -> Bool {
         guard let out = run("/usr/bin/codesign",
                             ["-d", "--entitlements", "-", "--xml", loader.path]) else { return false }
         return out.contains(entitlement)
@@ -94,17 +123,24 @@ final class CrossOverSupport: ObservableObject {
     }
 
     func refresh() {
-        guard Self.app != nil, loader != nil else { state = .notInstalled; message = ""; return }
-        let hasConfig = configured(), hasEntitlement = loaderEntitled()
-        switch (hasConfig, hasEntitlement) {
+        let installs = Self.installs
+        guard !installs.isEmpty else { state = .notInstalled; message = ""; return }
+        let hasConfig = configured()
+        let missing = installs.filter { !loaderEntitled($0.loader) }.map(\.name)
+        switch (hasConfig, missing.isEmpty) {
         case (true, true):
             state = .ready
-            message = "Ready. Games launched from CrossOver show the stats rows."
+            message = "Ready. Games launched from \(installs.map(\.name).joined(separator: " or ")) show the stats rows."
+        case (true, false) where missing.count < installs.count:
+            // Some copies done, others not: an update to one of them, or a
+            // copy installed since setup.
+            state = .entitlementLost
+            message = "\(missing.joined(separator: " and ")) was updated or installed since setup, so its games will not show the stats rows. Set up again to include it."
         case (true, false):
             // Config survives updates but the loader does not, so this pair
             // almost always means CrossOver was updated since setup.
             state = .entitlementLost
-            message = "CrossOver was updated and the change to its wine loader was lost. Set up again to restore it."
+            message = "\(missing.joined(separator: " and ")) was updated and the change to its wine loader was lost. Set up again to restore it."
         default:
             state = .needsSetup
             message = "Not set up. CrossOver games will show Apple's HUD without the custom rows."
@@ -114,7 +150,8 @@ final class CrossOverSupport: ObservableObject {
     // MARK: - Applying
 
     func setUp() {
-        guard let loader else { return }
+        let installs = Self.installs
+        guard !installs.isEmpty else { return }
         guard FileManager.default.fileExists(atPath: library.path) else {
             state = .failed("The stats library is missing from this app.")
             message = state.failureText ?? ""
@@ -125,7 +162,13 @@ final class CrossOverSupport: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             let configResult = await self.writeConfig()
-            let entitleResult = await self.entitleLoader(loader)
+            var entitleResults: [String] = []
+            for install in installs {
+                if let problem = await self.entitleLoader(install) {
+                    entitleResults.append(installs.count > 1 ? "\(install.name): \(problem)" : problem)
+                }
+            }
+            let entitleResult = entitleResults.isEmpty ? nil : entitleResults.joined(separator: "\n")
             await MainActor.run {
                 self.busy = false
                 let problem = configResult ?? entitleResult
@@ -140,7 +183,8 @@ final class CrossOverSupport: ObservableObject {
     }
 
     func revert() {
-        guard let loader else { return }
+        let installs = Self.installs
+        guard !installs.isEmpty else { return }
         busy = true
         message = "Reverting…"
         Task.detached(priority: .userInitiated) { [weak self] in
@@ -150,7 +194,13 @@ final class CrossOverSupport: ObservableObject {
             // the main actor, or Swift 6 rejects capturing a mutable var.
             // Both awaits spelled out: ?? takes an autoclosure, which cannot
             // contain one, and a captured var cannot cross into the main actor.
-            let restored = await self.restoreLoader(loader)
+            var failures: [String] = []
+            for install in installs {
+                if let problem = await self.restoreLoader(install) {
+                    failures.append(installs.count > 1 ? "\(install.name): \(problem)" : problem)
+                }
+            }
+            let restored = failures.isEmpty ? nil : failures.joined(separator: "\n")
             let removed = restored == nil ? await self.removeConfigLine() : nil
             let problem = restored ?? removed
             await MainActor.run {
@@ -205,17 +255,23 @@ final class CrossOverSupport: ObservableObject {
     /// app's bundle, and the check is on the calling process, not on being
     /// root. CrossOver's loader is normally owned by the user who installed it,
     /// so no elevation is needed at all -- only the App Management grant.
-    private func entitleLoader(_ loader: URL) async -> String? {
-        if loaderEntitled() { return nil }
+    private func entitleLoader(_ install: Install) async -> String? {
+        let loader = install.loader, backup = install.backup
+        if loaderEntitled(loader) { return nil }
         let fm = FileManager.default
         try? fm.createDirectory(at: backup.deletingLastPathComponent(),
                                 withIntermediateDirectories: true)
-        do { if !fm.fileExists(atPath: backup.path) {
-            try fm.copyItem(at: loader, to: backup) } }
+        // A loader without the entitlement is CodeWeavers' own, so it always
+        // replaces the backup. Keeping the first backup ever taken would, after
+        // an update, mean Revert put the previous version's loader back.
+        do {
+            try? fm.removeItem(at: backup)
+            try fm.copyItem(at: loader, to: backup)
+        }
         catch { return "Could not keep a copy of CrossOver's original loader: \(error.localizedDescription)" }
 
         let temp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("mhud-wine-loader")
+            .appendingPathComponent("mhud-wine-loader-\(install.name)")
         try? fm.removeItem(at: temp)
         do { try fm.copyItem(at: loader, to: temp) }
         catch { return "Could not prepare the change: \(error.localizedDescription)" }
@@ -246,10 +302,10 @@ final class CrossOverSupport: ObservableObject {
                 : "Could not add the entitlement: \(signed.text)"
         }
 
-        let problem = install(temp, over: loader)
+        let problem = self.install(temp, over: loader)
         try? fm.removeItem(at: temp)
         if let problem { return problem }
-        return loaderEntitled() ? nil
+        return loaderEntitled(loader) ? nil
             : "The change did not take effect. Quit CrossOver and try again."
     }
 
@@ -275,16 +331,25 @@ final class CrossOverSupport: ObservableObject {
         }
     }
 
-    private func restoreLoader(_ loader: URL) async -> String? {
-        guard FileManager.default.fileExists(atPath: backup.path) else {
+    private func restoreLoader(_ install: Install) async -> String? {
+        let loader = install.loader
+        // Nothing to undo on a copy that was never changed.
+        if !loaderEntitled(loader) { return nil }
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: install.backup.path), install.name == "CrossOver",
+           fm.fileExists(atPath: legacyBackup.path) {
+            try? fm.moveItem(at: legacyBackup, to: install.backup)
+        }
+        let backup = install.backup
+        guard fm.fileExists(atPath: backup.path) else {
             return "No copy of CrossOver's original loader was kept, so it cannot be restored here. Reinstalling CrossOver will restore it."
         }
         let temp = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("mhud-wine-loader-restore")
+            .appendingPathComponent("mhud-wine-loader-restore-\(install.name)")
         try? FileManager.default.removeItem(at: temp)
         do { try FileManager.default.copyItem(at: backup, to: temp) }
         catch { return "Could not prepare the restore: \(error.localizedDescription)" }
-        let problem = install(temp, over: loader)
+        let problem = self.install(temp, over: loader)
         try? FileManager.default.removeItem(at: temp)
         return problem
     }
