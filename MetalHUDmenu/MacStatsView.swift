@@ -189,7 +189,7 @@ struct MacStatsView: View {
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Setting up adds one line to CrossOver's own configuration, which covers every bottle including ones made later, and adds an entitlement to CrossOver's wine loader so macOS lets the stats library load. The loader is re-signed, replacing CodeWeavers' signature; the original is kept and Revert restores it. A CrossOver update undoes the loader change, and this will say so.")
+                Text("Setting up adds one line to CrossOver's own configuration, which covers every bottle including ones made later, and adds an entitlement to CrossOver's wine loader so macOS lets the stats library load. The loader is re-signed, replacing CodeWeavers' signature; the original is kept and Revert restores it. A CrossOver update undoes the loader change, and this will say so. NotProton recognises CrossOver by its original loader, so before NotProton sets up or updates a runner, Revert here, let NotProton finish, then Set up again.")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

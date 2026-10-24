@@ -196,7 +196,7 @@ final class SikarugirSupport: ObservableObject {
         } catch {
             // EPERM here is App Management refusing, as with CrossOver.
             if (error as NSError).code == NSFileWriteNoPermissionError {
-                return "macOS blocked the change. Allow MetalHUDmenu under System Settings > Privacy & Security > App Management, then try again."
+                return "macOS blocked the change. Allow MetalHUDmenu under System Settings > Privacy & Security > App Management, then quit and reopen MetalHUDmenu and try again: macOS applies the permission only after a restart."
             }
             return error.localizedDescription
         }

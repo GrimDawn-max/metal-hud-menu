@@ -325,7 +325,7 @@ final class CrossOverSupport: ObservableObject {
                 if !FileManager.default.isWritableFile(atPath: destination.path) {
                     return runPrivileged("/bin/cp -p '\(source.path)' '\(destination.path)'")
                 }
-                return "macOS blocked the change to CrossOver. Allow MetalHUDmenu under System Settings > Privacy & Security > App Management, then try again."
+                return "macOS blocked the change to CrossOver. Allow MetalHUDmenu under System Settings > Privacy & Security > App Management, then quit and reopen MetalHUDmenu and try again: macOS applies the permission only after a restart."
             }
             return "Could not update CrossOver's loader: \(error.localizedDescription)"
         }
@@ -411,7 +411,7 @@ final class CrossOverSupport: ObservableObject {
         // that needs the grant. Without it this fails as an opaque
         // "Operation not permitted", which tells the user nothing at all.
         if text.contains("not permitted") {
-            return "macOS blocked the change to CrossOver. Allow MetalHUDmenu under System Settings > Privacy & Security > App Management, then try again."
+            return "macOS blocked the change to CrossOver. Allow MetalHUDmenu under System Settings > Privacy & Security > App Management, then quit and reopen MetalHUDmenu and try again: macOS applies the permission only after a restart."
         }
         return text.isEmpty ? "The change could not be made." : text
     }
