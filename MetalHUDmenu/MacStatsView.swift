@@ -165,7 +165,7 @@ struct MacStatsView: View {
 
                 // MARK: - CrossOver
                 HStack {
-                    Text("CrossOver").font(.headline)
+                    Text("CrossOver").font(.system(size: 20, weight: .bold))
                     Spacer()
                     switch crossover.state {
                     case .ready:
@@ -186,11 +186,11 @@ struct MacStatsView: View {
                     }
                 }())
                 Text("MetalHUDmenu must be allowed under Privacy & Security \u{203A} App Management \u{2014} macOS guards other apps' bundles even from an administrator. A password is asked for only if CrossOver was installed by another account.")
-                    .font(.caption)
+                    .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Setting up adds one line to CrossOver's own configuration, which covers every bottle including ones made later, and adds an entitlement to CrossOver's wine loader so macOS lets the stats library load. The loader is re-signed, replacing CodeWeavers' signature; the original is kept and Revert restores it. A CrossOver update undoes the loader change, and this will say so.")
-                    .font(.caption)
+                    .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -200,7 +200,7 @@ struct MacStatsView: View {
 
                 // MARK: - Sikarugir
                 HStack {
-                    Text("Sikarugir").font(.headline)
+                    Text("Sikarugir").font(.system(size: 20, weight: .bold))
                     Spacer()
                     if sikarugir.state == .ready {
                         Button("Revert") { sikarugir.revert() }
@@ -217,7 +217,7 @@ struct MacStatsView: View {
                     }
                 }())
                 Text("Setting up adds one line to each wrapper's Unix Commands (Configure \u{203A} Configuration), keeping anything already there. Nothing is re-signed. It survives Sikarugir updates and engine changes; wrappers made later need Set up once. It also turns on each wrapper's own Metal HUD switch, which Revert puts back. Close any open Configure windows first: Configure saves all its settings when it closes and would undo the change. Needs the same App Management permission as CrossOver.")
-                    .font(.caption)
+                    .font(.system(size: 15))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -245,7 +245,7 @@ private struct SetupStatus: View {
         switch kind {
         case .working:
             Text(message)
-                .font(.caption)
+                .font(.system(size: 15))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         case .ready:
@@ -259,7 +259,7 @@ private struct SetupStatus: View {
 
     private func label(_ symbol: String, _ color: Color) -> some View {
         Label(message, systemImage: symbol)
-            .font(.callout.weight(.medium))
+            .font(.system(size: 15, weight: .medium))
             .foregroundStyle(color)
             .fixedSize(horizontal: false, vertical: true)
     }
