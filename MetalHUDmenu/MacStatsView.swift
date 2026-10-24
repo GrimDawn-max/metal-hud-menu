@@ -9,6 +9,7 @@ struct MacStatsView: View {
     @ObservedObject var settings: HUDSettingsManager
     @ObservedObject var helper: StatsHelper
     @StateObject private var crossover = CrossOverSupport()
+    @StateObject private var sikarugir = SikarugirSupport()
     @State private var profileMessage = ""
     /// What to describe in the strip below the list. Hovering previews a
     /// metric; clicking one keeps its description up afterwards, since system
@@ -28,7 +29,7 @@ struct MacStatsView: View {
     }
 
     var body: some View {
-        content.onAppear { crossover.refresh() }
+        content.onAppear { crossover.refresh(); sikarugir.refresh() }
     }
 
     private var content: some View {
@@ -175,22 +176,47 @@ struct MacStatsView: View {
                         Button("Set up") { crossover.setUp() }.disabled(crossover.busy)
                     }
                 }
-                if crossover.state == .entitlementLost {
-                    Label(crossover.message, systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(crossover.message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                SetupStatus(message: crossover.message, kind: {
+                    if crossover.busy { return .working }
+                    switch crossover.state {
+                    case .ready: return .ready
+                    case .needsSetup: return .off
+                    case .entitlementLost, .failed: return .problem
+                    case .notInstalled: return .working
+                    }
+                }())
                 Text("MetalHUDmenu must be allowed under Privacy & Security \u{203A} App Management \u{2014} macOS guards other apps' bundles even from an administrator. A password is asked for only if CrossOver was installed by another account.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Setting up adds one line to CrossOver's own configuration, which covers every bottle including ones made later, and adds an entitlement to CrossOver's wine loader so macOS lets the stats library load. The loader is re-signed, replacing CodeWeavers' signature; the original is kept and Revert restores it. A CrossOver update undoes the loader change, and this will say so.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !SikarugirSupport.wrappers.isEmpty {
+                Divider().padding(.vertical, 4)
+
+                // MARK: - Sikarugir
+                HStack {
+                    Text("Sikarugir").font(.headline)
+                    Spacer()
+                    if sikarugir.state == .ready {
+                        Button("Revert") { sikarugir.revert() }
+                    } else {
+                        Button("Set up") { sikarugir.setUp() }
+                    }
+                }
+                SetupStatus(message: sikarugir.message, kind: {
+                    switch sikarugir.state {
+                    case .ready: return .ready
+                    case .needsSetup: return .off
+                    case .partlySetUp, .failed: return .problem
+                    case .notInstalled: return .working
+                    }
+                }())
+                Text("Setting up adds one line to each wrapper's Unix Commands (Configure \u{203A} Configuration), keeping anything already there. Nothing is re-signed. It survives Sikarugir updates and engine changes; wrappers made later need Set up once. It also turns on each wrapper's own Metal HUD switch, which Revert puts back. Close any open Configure windows first: Configure saves all its settings when it closes and would undo the change. Needs the same App Management permission as CrossOver.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -205,5 +231,36 @@ struct MacStatsView: View {
             Spacer()
         }
         }
+    }
+}
+
+/// The one-line state of a setup section, coloured so "off" is as visible as
+/// "broken": a grey caption read as part of the explanation below it.
+private struct SetupStatus: View {
+    enum Kind { case ready, off, problem, working }
+    let message: String
+    let kind: Kind
+
+    var body: some View {
+        switch kind {
+        case .working:
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        case .ready:
+            label("checkmark.circle.fill", .green)
+        case .off:
+            label("minus.circle.fill", .purple)
+        case .problem:
+            label("exclamationmark.triangle.fill", .red)
+        }
+    }
+
+    private func label(_ symbol: String, _ color: Color) -> some View {
+        Label(message, systemImage: symbol)
+            .font(.callout.weight(.medium))
+            .foregroundStyle(color)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
