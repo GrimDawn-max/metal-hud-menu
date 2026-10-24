@@ -249,12 +249,26 @@ private struct SetupStatus: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         case .ready:
-            label("checkmark.circle.fill", .green)
+            label("checkmark.circle.fill", Self.ready)
         case .off:
-            label("minus.circle.fill", .purple)
+            label("minus.circle.fill", Self.off)
         case .problem:
-            label("exclamationmark.triangle.fill", .red)
+            label("exclamationmark.triangle.fill", Self.problem)
         }
+    }
+
+    /// Darker than the system colours, which are hard to read as text on a
+    /// light window. Dark mode keeps lighter shades so they still stand out.
+    private static let ready = shade(light: (0.05, 0.50, 0.20), dark: (0.35, 0.80, 0.45))
+    private static let off = shade(light: (0.42, 0.18, 0.62), dark: (0.75, 0.58, 0.95))
+    private static let problem = shade(light: (0.72, 0.10, 0.10), dark: (1.00, 0.45, 0.42))
+
+    private static func shade(light: (CGFloat, CGFloat, CGFloat),
+                              dark: (CGFloat, CGFloat, CGFloat)) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let c = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: 1)
+        })
     }
 
     private func label(_ symbol: String, _ color: Color) -> some View {
