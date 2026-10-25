@@ -57,14 +57,18 @@ inline bool temperatureHeadline(const std::vector<float> &values,bool knownKeys,
   return true;
 }
 
-// Per-core SMC keys TG Pro shows on this chip, matched against it on an M4 Max (Mac16,6, macOS 27).
-// ponytail: one verified chip; others average every Tp*/Te* key until checked against TG Pro.
+// Per-core SMC keys TG Pro shows on each chip, matched against it: M4 Max (Mac16,6, macOS 27) and
+// M1 Max (MacBookPro18,2, macOS 26.4.1, idle and light load; the hottest of these is within 0.6 C of
+// TG Pro's hottest core, while the M1 Max's other Tp*/Te* keys run up to 10 C hotter).
+// ponytail: two verified chips; others average every Tp*/Te* key until checked against TG Pro.
 inline const std::vector<std::string> &coreTemperatureKeys() {
   static const std::vector<std::string> keys=[] {
     char brand[128]{}; size_t size=sizeof(brand);
     sysctlbyname("machdep.cpu.brand_string",brand,&size,nullptr,0);
     if(!std::strcmp(brand,"Apple M4 Max"))
       return std::vector<std::string>{"Te05","Te0S","Tp01","Tp09","Tp0H","Tp0P","Tp0X","Tp1j","Tp1t","Tp1z","Tp25","Tp2B"};
+    if(!std::strcmp(brand,"Apple M1 Max"))
+      return std::vector<std::string>{"Tp01","Tp05","Tp09","Tp0D","Tp0H","Tp0L","Tp0P","Tp0T","Tp0X","Tp0b"};
     return std::vector<std::string>{};
   }();
   return keys;

@@ -12,7 +12,7 @@ one number, as described below. For per-core, per-sensor or per-device detail, u
 |---|---|---|
 | `cpuusage` | CPU usage | Share of total CPU capacity in use, all cores. |
 | `cpuclock` | CPU E-core clock, CPU P-core clock | Average clock of each cluster while active, MHz. |
-| `cputemp` | CPU temperature | **Differs by chip at present.** On an M4 Max: the hottest CPU core, matched to TG Pro. On other chips: the average of all CPU sensors, which reads lower than the hottest core (about 18 °C lower on an M1 Max under load). |
+| `cputemp` | CPU temperature | Hottest CPU core, matched to TG Pro on M4 Max and M1 Max. On chips not yet checked, the average of all CPU sensors instead, which reads lower than the hottest core. |
 | `cpupower` | CPU power est. | CPU package power, watts. On chips without per-cluster rails (M1 Max) it is read from the package channel instead. |
 | `ecorepower` | CPU E-core power | Efficiency-core cluster power, watts. |
 | `pcorepower` | CPU P-core power | Performance-core clusters, summed. E + P equals the package figure, so the pair shows where the work runs. |
@@ -62,7 +62,7 @@ samples.
 
 **Models differ.** Sensor names, power channels and clock tables vary between Apple chips, and only
 the chips named above have been checked against another tool. A figure on an unchecked chip may
-use a fallback, as CPU temperature does.
+use a fallback, as CPU temperature does (an average rather than the hottest core).
 
 ## Where the numbers come from
 
