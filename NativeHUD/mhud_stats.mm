@@ -1,5 +1,6 @@
 // MetalHUDmenu Mac stats: live system readings inside Apple's Metal HUD.
-// macOS 27+: public StateReporting API. macOS 26: the private QuartzCore label API DXMT uses.
+// macOS 27+: public StateReporting API. macOS 26: Apple's custom-metric API (Custom Metrics section)
+// where the HUD has it, otherwise the private QuartzCore label API DXMT uses.
 // The stat selection is read live from MetalHUDmenu's preferences (key "systemStats").
 #import <Foundation/Foundation.h>
 #import <objc/message.h>
@@ -293,6 +294,8 @@ void installLabelHooks() {
   }
 }
 
+NSArray<NSString*> *orderedKeys(NSDictionary<NSString*,NSString*> *values);
+
 // macOS 26: one HUD line per stat via _CADeveloperHUDProperties (addLabel:after:, updateLabel:value:, remove:),
 // the same calls DXMT makes. These methods are gone on 27, so every call is guarded.
 // ponytail: untested on a macOS 26 machine; verify layout and threading there.
@@ -327,29 +330,7 @@ void reportLegacy(NSDictionary<NSString*,NSString*> *values) {
              (hud && [hud respondsToSelector:@selector(remove:)]) ? "yes" : "no");
   }
   if(!hud||![hud respondsToSelector:@selector(addLabel:after:)]||![hud respondsToSelector:@selector(updateLabel:value:)]||![hud respondsToSelector:@selector(remove:)]) return;
-  // Group by subsystem rather than alphabetically. Sorting by label scatters
-  // related rows -- "E-core power" lands between "Disk write" and "Ethernet
-  // down" -- which makes a long list hard to read. labels[] is already in a
-  // sensible order, so rank by that and fall back to alphabetical for anything
-  // not in the table (the per-fan rows, which are generated).
-  NSArray *keys=[values.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *a,NSString *b){
-    auto rank=[](NSString *label)->NSInteger{
-      for(NSInteger i=0;i<MetricCount;i++)
-        if([label isEqualToString:@(labels[i])]) return i;
-      // Fan rows sit with Fans; everything unknown goes last.
-      if([label hasPrefix:@"Fan "]) return Fans;
-      // Combined rows rank where their first component would.
-      if([label isEqualToString:@"Disk R/W"]) return DiskRead;
-      if([label isEqualToString:@"Ext disk R/W"]) return ExtDiskRead;
-      if([label isEqualToString:@"Network D/U"]) return NetDown;
-      if([label isEqualToString:@"Wi-Fi D/U"]) return WifiDown;
-      if([label isEqualToString:@"Ethernet D/U"]) return EthDown;
-      return MetricCount;
-    };
-    NSInteger ra=rank(a), rb=rank(b);
-    if(ra!=rb) return ra<rb?NSOrderedAscending:NSOrderedDescending;
-    return [a compare:b];
-  }];
+  NSArray *keys=orderedKeys(values);
   NSMutableArray *ids=[NSMutableArray array];
   for(NSString *key in keys) [ids addObject:[@"MetalHUDmenu." stringByAppendingString:key]];
   if(![ids isEqualToArray:shown]) {
@@ -384,19 +365,99 @@ void reportLegacy(NSDictionary<NSString*,NSString*> *values) {
   }
 }
 
+// Group by subsystem rather than alphabetically. Sorting by label scatters
+// related rows -- "E-core power" lands between "Disk write" and "Ethernet
+// down" -- which makes a long list hard to read. labels[] is already in a
+// sensible order, so rank by that and fall back to alphabetical for anything
+// not in the table (the per-fan rows, which are generated).
+NSArray<NSString*> *orderedKeys(NSDictionary<NSString*,NSString*> *values) {
+  return [values.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *a,NSString *b){
+    auto rank=[](NSString *label)->NSInteger{
+      for(NSInteger i=0;i<MetricCount;i++)
+        if([label isEqualToString:@(labels[i])]) return i;
+      // Fan rows sit with Fans; everything unknown goes last.
+      if([label hasPrefix:@"Fan "]) return Fans;
+      // Combined rows rank where their first component would.
+      if([label isEqualToString:@"Disk R/W"]) return DiskRead;
+      if([label isEqualToString:@"Ext disk R/W"]) return ExtDiskRead;
+      if([label isEqualToString:@"Network D/U"]) return NetDown;
+      if([label isEqualToString:@"Wi-Fi D/U"]) return WifiDown;
+      if([label isEqualToString:@"Ethernet D/U"]) return EthDown;
+      return MetricCount;
+    };
+    NSInteger ra=rank(a), rb=rank(b);
+    if(ra!=rb) return ra<rb?NSOrderedAscending:NSOrderedDescending;
+    return [a compare:b];
+  }];
+}
+
+// macOS 26: Apple's custom-metric API, the one D3DMetal uses for its own section. Rows appear under
+// "Custom Metrics" and, unlike added labels, are shown while MTL_HUD_ELEMENTS is set, so the user's
+// element picks are kept. On macOS 26.4 the methods are on _CADeveloperHUDProperties; MTLHUDService
+// is the name later builds use.
+//
+// The section only draws when the HUD's "client" element (bit 31) was on when the HUD read its
+// settings, which happens once, when the HUD is created -- normally at the process's first Metal
+// frame. A helper loaded after that (through a Wine runtime's winemac.so, in Grim Dawn) cannot add
+// it, so MetalHUDmenu puts MTL_HUD_EXTRA_ELEMENTS=client into the environment games inherit.
+// Measured on macOS 26.4.1.
+//
+// Returns nil until the HUD exists, NO when this API cannot be used (fall back to labels).
+NSNumber *reportCustom(NSDictionary<NSString*,NSString*> *values) {
+  Class cls=objc_lookUpClass("MTLHUDService")?:objc_lookUpClass("_CADeveloperHUDProperties");
+  if(!cls||![cls respondsToSelector:@selector(instance)]) return @NO;
+  SEL insert=@selector(insertMetric:after:name:unit:nameColor:valueColor:visualType:options:);
+  Method m=class_getInstanceMethod(cls,insert);
+  // BOOL is "B" on arm64 and "c" on x86_64; the arguments must match exactly.
+  if(!m||strcmp(method_getTypeEncoding(m)+1,"68@0:8@16@24@32@40I48I52I56Q60")) return @NO;
+  for(SEL s:{@selector(updateLabelMetric:label:),@selector(removeMetric:),@selector(isHUDElementEnabled:)})
+    if(![cls instancesRespondToSelector:s]) return @NO;
+  id hud=((id(*)(id,SEL))objc_msgSend)(cls,@selector(instance));
+  if(!hud) return nil;
+  if(!((BOOL(*)(id,SEL,uint64_t))objc_msgSend)(hud,@selector(isHUDElementEnabled:),1ull<<31)) {
+    static bool told=false;
+    if(!told) { told=true; MHUD_LOG("custom metrics: the HUD's client element is off -- falling back to labels"); }
+    return @NO;
+  }
+  // A rebuilt HUD is a new instance that knows nothing of the rows added to the old one.
+  static __weak id lastHud=nil;
+  static NSArray<NSString*> *shown=@[];
+  if(hud!=lastHud) { lastHud=hud; shown=@[]; }
+  NSArray<NSString*> *keys=orderedKeys(values);
+  NSMutableArray *ids=[NSMutableArray array];
+  for(NSString *key in keys) [ids addObject:[kLabelPrefix stringByAppendingString:key]];
+  if(![ids isEqualToArray:shown]) {
+    for(NSString *row in shown) ((void(*)(id,SEL,id))objc_msgSend)(hud,@selector(removeMetric:),row);
+    for(NSUInteger i=0;i<keys.count;i++) // nil "after" appends
+      ((BOOL(*)(id,SEL,id,id,id,id,uint32_t,uint32_t,uint32_t,uint64_t))objc_msgSend)(hud,insert,
+        ids[i],nil,keys[i],@"",0xFFFFFFFFu,0xFFFFFFFFu,1u,0ull);
+    MHUD_LOG("custom metrics: %lu rows",(unsigned long)ids.count);
+    shown=ids;
+  }
+  for(NSUInteger i=0;i<keys.count;i++)
+    ((void(*)(id,SEL,id,id))objc_msgSend)(hud,@selector(updateLabelMetric:label:),ids[i],values[keys[i]]);
+  return @YES;
+}
+
 void tick() { @autoreleasepool {
   static unsigned long ticks=0;
   if(++ticks==1||ticks%60==0) MHUD_LOG("tick %lu", ticks);
   installLabelHooks();
   bool on[MetricCount]; readSelection(on);
   NSDictionary *values=sample(on);
-  static bool toldPath=false;
-  if(!toldPath) {
-    toldPath=true;
-    if(@available(macOS 27.0,*)) MHUD_LOG("reporting via the macOS 27 StateReporting path");
-    else                          MHUD_LOG("reporting via the macOS 26 legacy label path");
+  if(@available(macOS 27.0,*)) { reportModern(values); return; }
+  // Decided once the HUD exists; labels only when custom metrics cannot be used here.
+  static int route=0; // 0 undecided, 1 custom metrics, 2 labels
+  if(route!=2) {
+    NSNumber *ok=reportCustom(values);
+    if(!ok) return;
+    if(!route) {
+      route=ok.boolValue?1:2;
+      MHUD_LOG("reporting via the macOS 26 %{public}s path",route==1?"custom-metrics":"label");
+    }
+    if(route==1) return;
   }
-  if(@available(macOS 27.0,*)) reportModern(values); else reportLegacy(values);
+  reportLegacy(values);
   if(debug) fprintf(stderr,"MHUD_STATS %s\n",values.description.UTF8String);
 } }
 
@@ -442,11 +503,24 @@ __attribute__((constructor)) static void start() {
   // writes it into the launchd session, so a terminal-launched app usually
   // does not have it, which is why this went unnoticed for so long. Clearing
   // it here works because this constructor runs when the dylib is inserted,
-  // and Apple's HUD reads the variable later, when the Metal device is made.
+  // and Apple's HUD reads the variable later, when it is created at the first frame.
   //
   // The default element set is very close to what the panel writes anyway, so
   // little is lost; the alternative is custom rows that never appear.
-  if(const char *el=getenv("MTL_HUD_ELEMENTS")) {
+  //
+  // None of this applies where the custom-metric API exists (macOS 26.4 has it): its rows are shown
+  // with MTL_HUD_ELEMENTS set, so the picks stay and only "client" is added. That works here when this
+  // constructor runs before the HUD is created; MetalHUDmenu also sets it for later loads.
+  // The HUD library may not be loaded yet, so look for the method in the file. macOS 27 keeps its own path.
+  bool customMetrics=false;
+  if(@available(macOS 27.0,*)) {}
+  else for(const char *path:{"/usr/lib/libMTLHud.dylib","/System/Volumes/Preboot/Cryptexes/OS/usr/lib/libMTLHud.dylib"}) {
+    NSData *data=[NSData dataWithContentsOfFile:@(path) options:NSDataReadingMappedIfSafe error:nil];
+    const char *needle="insertMetric:after:name:unit:nameColor:valueColor:visualType:options:";
+    if(data&&memmem(data.bytes,data.length,needle,strlen(needle))) { customMetrics=true; break; }
+  }
+  if(customMetrics) appendEnv("MTL_HUD_EXTRA_ELEMENTS","client");
+  if(const char *el=getenv("MTL_HUD_ELEMENTS"); el&&!customMetrics) {
     MHUD_LOG("clearing MTL_HUD_ELEMENTS (%{public}s) -- it hides every added row", el);
     unsetenv("MTL_HUD_ELEMENTS");
   }

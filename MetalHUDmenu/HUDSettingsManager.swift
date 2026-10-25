@@ -204,6 +204,14 @@ class HUDSettingsManager: ObservableObject {
             runLaunchctl(["setenv", "MTL_HUD_OPACITY", String(format: "%.3f", opacity)])
             runLaunchctl(["setenv", "MTL_HUD_SCALE", String(format: "%.3f", scale)])
             runLaunchctl(["setenv", "MTL_HUD_ALIGNMENT", alignmentValue(for: alignment)])
+            // macOS 26: the stats rows go in the HUD's Custom Metrics section, whose "client" element
+            // must be on when the game's HUD is created, at its first frame. The stats library cannot
+            // add it when it loads after that (through a Wine runtime's winemac.so), so it is set here, where
+            // every game inherits it. macOS 27 shows the rows under State Reporters instead.
+            if #unavailable(macOS 27) {
+                runLaunchctl(systemStats.isEmpty ? ["unsetenv", "MTL_HUD_EXTRA_ELEMENTS"]
+                                                 : ["setenv", "MTL_HUD_EXTRA_ELEMENTS", "client"])
+            }
             statusMessage = "✅ Applied Metal HUD settings."
         } else {
             disableHUD()
