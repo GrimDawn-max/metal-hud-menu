@@ -63,7 +63,8 @@ inline bool activeClock(const std::vector<State> &states,const std::vector<doubl
   long double weighted=0, active=0;
   for(const auto &state:states) {
     const int index=frequencyIndex(state.name);
-    if(index<0) continue;
+    // States with no time are skipped: the M1 Max GPU reports P1-P15 against a 6-clock table.
+    if(index<0||state.residency==0) continue;
     if(index>=(int)table.size()||state.residency<0) return false;
     weighted+=(long double)table[(size_t)index]*state.residency;
     active+=state.residency;

@@ -102,7 +102,8 @@ class HUDSettingsManager: ObservableObject {
                      ("MTL_HUD_ELEMENTS", selectedElements.sorted().joined(separator: ",")),
                      ("MTL_HUD_OPACITY", String(format: "%.3f", opacity)),
                      ("MTL_HUD_SCALE", String(format: "%.3f", scale)),
-                     ("MTL_HUD_ALIGNMENT", alignmentValue(for: alignment))])
+                     ("MTL_HUD_ALIGNMENT", alignmentValue(for: alignment)),
+                     ("MTL_HUD_EXTRA_ELEMENTS", customMetricsElement)])
         } else {
             disableHUD()
         }
@@ -128,6 +129,15 @@ class HUDSettingsManager: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    /// macOS 26: the stats rows' Custom Metrics section needs the HUD's "client" element on when the
+    /// game's HUD is created, at its first frame. The helper adds it itself when it loads before that,
+    /// but through a Wine runtime's winemac.so it loads after (measured in Grim Dawn under CrossOver
+    /// 26.3, macOS 26.4.1), so it is set here too, where every game inherits it.
+    var customMetricsElement: String {
+        if #available(macOS 27, *) { return "" }
+        return systemStatsEnabled && !systemStats.isEmpty ? "client" : ""
+    }
 
     func alignmentValue(for key: String) -> String {
         Self.alignments.first { $0.key == key }?.value ?? "4"

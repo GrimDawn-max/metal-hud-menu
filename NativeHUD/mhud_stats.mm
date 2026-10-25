@@ -26,6 +26,7 @@
 #include "stats/telemetry.hpp"
 #include "stats/power.hpp"
 #include "stats/usage.hpp"
+#include "stats/io.hpp"
 
 namespace {
 using hudstats::Reading;
@@ -37,17 +38,24 @@ const std::string kNotify="com.Jfishin.MetalHUDmenu.stats.";
 // The one stat list. MetalHUDmenu shows it through mhud_catalog(), in this order.
 // Tokens are stored in preferences and published names: never rename them. Apple's HUD sorts rows
 // by label, so labels share a prefix ("CPU ", "GPU ", "Memory ") to keep each group together.
-enum Metric { CPUUsage, CPUClock, CPUTemp, CPUPower, GPUUsage, GPUClock, GPUTemp, GPUPower, ANEUsage,
-              MemPressure, Swap, Free, Inactive, SystemPower, Thermal, Fans, MetricCount };
+enum Metric { CPUUsage, CPUClock, CPUTemp, CPUPower, ECorePower, PCorePower, GPUUsage, GPUClock, GPUTemp, GPUPower,
+              ANEUsage, MemPressure, Swap, Free, Inactive, DiskRead, DiskWrite, ExtDiskRead, ExtDiskWrite,
+              NetDown, NetUp, WifiDown, WifiUp, EthDown, EthUp, SystemPower, Thermal, Fans, MetricCount };
 struct Info { const char *token, *label, *group; };
 constexpr Info catalog[MetricCount]={
   {"cpuusage","CPU usage","CPU"}, {"cpuclock","CPU clock","CPU"},
   {"cputemp","CPU temperature","CPU"}, {"cpupower","CPU power est.","CPU"},
+  {"ecorepower","CPU E-core power","CPU"}, {"pcorepower","CPU P-core power","CPU"},
   {"gpuusage","GPU usage","GPU & Neural Engine"}, {"gpuclock","GPU clock","GPU & Neural Engine"},
   {"gputemp","GPU temperature","GPU & Neural Engine"}, {"gpupower","GPU power","GPU & Neural Engine"},
   {"aneusage","ANE usage","GPU & Neural Engine"},
   {"mempressure","Memory pressure","Memory"}, {"swap","Memory swap used","Memory"},
   {"free","Memory free","Memory"}, {"inactive","Memory free+inactive","Memory"},
+  {"diskread","Disk read","Disk & Network"}, {"diskwrite","Disk write","Disk & Network"},
+  {"extdiskread","Disk read, external","Disk & Network"}, {"extdiskwrite","Disk write, external","Disk & Network"},
+  {"netdown","Network down","Disk & Network"}, {"netup","Network up","Disk & Network"},
+  {"wifidown","Network down, Wi-Fi","Disk & Network"}, {"wifiup","Network up, Wi-Fi","Disk & Network"},
+  {"ethdown","Network down, Ethernet","Disk & Network"}, {"ethup","Network up, Ethernet","Disk & Network"},
   {"systempower","System power","System"}, {"thermal","Thermal pressure","System"}, {"fans","Fans","System"},
 };
 // Rows per metric; empty means not selected. Fans and CPU clock have several.
@@ -136,13 +144,27 @@ Rows measure(const bool on[MetricCount]) {
     else if(f.fans.empty()) one(Fans,{Status::Ready,NAN}); // fanless Mac
     for(const auto &fan:f.fans) rows[Fans].push_back(ready(fan.actual,fan.rpm));
   }
-  if(on[CPUPower]||on[GPUPower]||on[SystemPower]) {
+  if(on[CPUPower]||on[GPUPower]||on[SystemPower]||on[ECorePower]||on[PCorePower]) {
     static power::Sampler s;
-    auto v=s.read(on[CPUPower],on[GPUPower],on[SystemPower]);
+    auto v=s.read(on[CPUPower],on[GPUPower],on[SystemPower],on[ECorePower]||on[PCorePower]);
     if(on[CPUPower]) one(CPUPower,v.cpu);
+    // Measured on an M1 Max as an exact split of the package figure; see power::Group::Kind::ECore.
+    if(on[ECorePower]) one(ECorePower,v.ecore);
+    if(on[PCorePower]) one(PCorePower,v.pcore);
     if(on[GPUPower]) one(GPUPower,v.gpu);
     if(on[SystemPower]) one(SystemPower,v.system);
   }
+  // Whole-system rates in bytes per second, averaged over about four seconds (see io::detail::Counter).
+  auto rate=[](io::Status status,double bps) {
+    return status==io::Status::Ready?Reading{Status::Ready,bps}:status==io::Status::Sampling?Reading{Status::Sampling,0}:Reading{};
+  };
+  static io::Sampler io;
+  auto pair=[&](Metric a,Metric b,io::Rate r) { if(on[a]) one(a,rate(r.status,r.readBps)); if(on[b]) one(b,rate(r.status,r.writeBps)); };
+  if(on[DiskRead]||on[DiskWrite]) pair(DiskRead,DiskWrite,io.storage(false));
+  if(on[ExtDiskRead]||on[ExtDiskWrite]) pair(ExtDiskRead,ExtDiskWrite,io.storage(true));
+  if(on[NetDown]||on[NetUp]) pair(NetDown,NetUp,io.network());
+  if(on[WifiDown]||on[WifiUp]) pair(WifiDown,WifiUp,io.network(io::detail::Link::WiFi));
+  if(on[EthDown]||on[EthUp]) pair(EthDown,EthUp,io.network(io::detail::Link::Ethernet));
   if(on[MemPressure]) {
     // Activity Monitor's numbers: the kernel's free percentage and its pressure level (1, 2 or 4).
     int freePercent=-1, level=0; size_t size=sizeof(int);
@@ -181,6 +203,13 @@ NSString *text(Metric m,const Reading &r) {
     case CPUTemp: case GPUTemp: return fmt("%.1f C",r.value);
     case CPUPower: return fmt("~%.1f W",r.value);
     case GPUPower: case SystemPower: return fmt("%.1f W",r.value);
+    case ECorePower: case PCorePower: return fmt("%.2f W",r.value);
+    case DiskRead: case DiskWrite: case ExtDiskRead: case ExtDiskWrite:
+    case NetDown: case NetUp: case WifiDown: case WifiUp: case EthDown: case EthUp: {
+      // The unit follows the size, with precision to match, so nothing reads "5120.0 MB/s".
+      const double v=r.value;
+      return v>=1073741824.0?fmt("%.2f GB/s",v/1073741824.0):v>=1048576.0?fmt("%.1f MB/s",v/1048576.0):fmt("%.0f KB/s",v/1024.0);
+    }
     case MemPressure: {
       const int level=int(r.value)/1000;
       NSString *name=level==1?@"Normal":level==2?@"Warning":level==4?@"Critical":@"Unknown";
@@ -299,7 +328,7 @@ uint32_t valueColor(Metric m,const Reading &r) {
 id metricService() {
   static id service=[]() -> id {
     if(getenv("MHUD_STATE_REPORTER")) return nil; // force the fallback, to check it after an OS update
-    Class cls=objc_lookUpClass("MTLHUDService");
+    Class cls=objc_lookUpClass("MTLHUDService")?:objc_lookUpClass("_CADeveloperHUDProperties"); // the latter on macOS 26.4
     Method insert=cls?class_getInstanceMethod(cls,@selector(insertMetric:after:name:unit:nameColor:valueColor:visualType:options:)):nullptr;
     // BOOL is "B" on arm64 and "c" on x86_64; the arguments must match exactly.
     if(!insert||strcmp(method_getTypeEncoding(insert)+1,"68@0:8@16@24@32@40I48I52I56Q60")) return nil;
