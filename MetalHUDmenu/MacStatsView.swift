@@ -8,8 +8,11 @@ struct MacStatsView: View {
         if let index = groups.firstIndex(where: { $0.name == stat.group }) { groups[index].stats.append(stat) }
         else { groups.append((stat.group, [stat])) }
     }
-    /// Three columns fit the labels; later groups stack in the last one.
-    private var columns: [[Group]] { groups.count <= 3 ? groups.map { [$0] } : groups.prefix(2).map { [$0] } + [Array(groups.dropFirst(2))] }
+    /// Three columns fit the labels; groups fill them left to right in rows, and each row of groups
+    /// starts on one line so the headings align.
+    private var rows: [[Group]] {
+        stride(from: 0, to: groups.count, by: 3).map { Array(groups[$0..<min($0 + 3, groups.count)]) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -26,24 +29,25 @@ struct MacStatsView: View {
                         .font(.caption).foregroundStyle(.orange)
                 }
             }
-            HStack(alignment: .top, spacing: 16) {
-                ForEach(columns.indices, id: \.self) { column in
-                    VStack(alignment: .leading, spacing: 5) {
-                        ForEach(columns[column], id: \.name) { group in
-                            Text(group.name).font(.subheadline.bold())
-                                .padding(.top, group.name == columns[column].first?.name ? 0 : 8)
-                            ForEach(group.stats) { stat in
-                                Toggle(stat.label, isOn: Binding(
-                                    get: { settings.systemStats.contains(stat.id) },
-                                    set: { on in
-                                        if on { settings.systemStats.insert(stat.id) }
-                                        else { settings.systemStats.remove(stat.id) }
-                                    }
-                                )).toggleStyle(.checkbox)
+            Grid(alignment: .topLeading, horizontalSpacing: 16, verticalSpacing: 12) {
+                ForEach(rows.indices, id: \.self) { row in
+                    GridRow(alignment: .top) {
+                        ForEach(rows[row], id: \.name) { group in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(group.name).font(.subheadline.bold())
+                                ForEach(group.stats) { stat in
+                                    Toggle(stat.label, isOn: Binding(
+                                        get: { settings.systemStats.contains(stat.id) },
+                                        set: { on in
+                                            if on { settings.systemStats.insert(stat.id) }
+                                            else { settings.systemStats.remove(stat.id) }
+                                        }
+                                    )).toggleStyle(.checkbox)
+                                }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .disabled(!settings.systemStatsEnabled)

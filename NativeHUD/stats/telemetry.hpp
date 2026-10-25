@@ -18,7 +18,7 @@
 namespace hudstats {
 // Interval readings need two samples before they are Ready.
 enum class Status { Unavailable, Sampling, Ready };
-struct Reading { Status status=Status::Unavailable; double value=0; };
+struct Reading { Status status=Status::Unavailable; double value=0, second=0; }; // second: paired rates only
 
 struct MemorySample {
   uint64_t physicalBytes=0, freeBytes=0, inactiveBytes=0, purgeableBytes=0;

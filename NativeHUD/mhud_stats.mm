@@ -39,8 +39,7 @@ const std::string kNotify="com.Jfishin.MetalHUDmenu.stats.";
 // Tokens are stored in preferences and published names: never rename them. Apple's HUD sorts rows
 // by label, so labels share a prefix ("CPU ", "GPU ", "Memory ") to keep each group together.
 enum Metric { CPUUsage, CPUClock, CPUTemp, CPUPower, ECorePower, PCorePower, GPUUsage, GPUClock, GPUTemp, GPUPower,
-              ANEUsage, MemPressure, Swap, Free, Inactive, DiskRead, DiskWrite, ExtDiskRead, ExtDiskWrite,
-              NetDown, NetUp, WifiDown, WifiUp, EthDown, EthUp, SystemPower, Thermal, Fans, MetricCount };
+              ANEUsage, MemPressure, Swap, Free, Inactive, Disk, ExtDisk, Network, WiFi, Wired, SystemPower, Thermal, Fans, MetricCount };
 struct Info { const char *token, *label, *group; };
 constexpr Info catalog[MetricCount]={
   {"cpuusage","CPU usage","CPU"}, {"cpuclock","CPU clock","CPU"},
@@ -51,11 +50,8 @@ constexpr Info catalog[MetricCount]={
   {"aneusage","ANE usage","GPU & Neural Engine"},
   {"mempressure","Memory pressure","Memory"}, {"swap","Memory swap used","Memory"},
   {"free","Memory free","Memory"}, {"inactive","Memory free+inactive","Memory"},
-  {"diskread","Disk read","Disk & Network"}, {"diskwrite","Disk write","Disk & Network"},
-  {"extdiskread","Disk read, external","Disk & Network"}, {"extdiskwrite","Disk write, external","Disk & Network"},
-  {"netdown","Network down","Disk & Network"}, {"netup","Network up","Disk & Network"},
-  {"wifidown","Network down, Wi-Fi","Disk & Network"}, {"wifiup","Network up, Wi-Fi","Disk & Network"},
-  {"ethdown","Network down, Ethernet","Disk & Network"}, {"ethup","Network up, Ethernet","Disk & Network"},
+  {"diskio","Disk","Disk"}, {"extdiskio","External disk","Disk"},
+  {"network","Network","Network"}, {"wifi","Wi-Fi","Network"}, {"wired","Wired","Network"},
   {"systempower","System power","System"}, {"thermal","Thermal pressure","System"}, {"fans","Fans","System"},
 };
 // Rows per metric; empty means not selected. Fans and CPU clock have several.
@@ -155,16 +151,18 @@ Rows measure(const bool on[MetricCount]) {
     if(on[SystemPower]) one(SystemPower,v.system);
   }
   // Whole-system rates in bytes per second, averaged over about four seconds (see io::detail::Counter).
-  auto rate=[](io::Status status,double bps) {
-    return status==io::Status::Ready?Reading{Status::Ready,bps}:status==io::Status::Sampling?Reading{Status::Sampling,0}:Reading{};
-  };
+  // One row per device class: read and write (down and up) together, so value carries the first
+  // and second the other.
   static io::Sampler io;
-  auto pair=[&](Metric a,Metric b,io::Rate r) { if(on[a]) one(a,rate(r.status,r.readBps)); if(on[b]) one(b,rate(r.status,r.writeBps)); };
-  if(on[DiskRead]||on[DiskWrite]) pair(DiskRead,DiskWrite,io.storage(false));
-  if(on[ExtDiskRead]||on[ExtDiskWrite]) pair(ExtDiskRead,ExtDiskWrite,io.storage(true));
-  if(on[NetDown]||on[NetUp]) pair(NetDown,NetUp,io.network());
-  if(on[WifiDown]||on[WifiUp]) pair(WifiDown,WifiUp,io.network(io::detail::Link::WiFi));
-  if(on[EthDown]||on[EthUp]) pair(EthDown,EthUp,io.network(io::detail::Link::Ethernet));
+  auto pair=[&](Metric m,io::Rate r) {
+    one(m,r.status==io::Status::Ready?Reading{Status::Ready,r.readBps,r.writeBps}
+         :r.status==io::Status::Sampling?Reading{Status::Sampling}:Reading{});
+  };
+  if(on[Disk]) pair(Disk,io.storage(false));
+  if(on[ExtDisk]) pair(ExtDisk,io.storage(true));
+  if(on[Network]) pair(Network,io.network());
+  if(on[WiFi]) pair(WiFi,io.network(io::detail::Link::WiFi));
+  if(on[Wired]) pair(Wired,io.network(io::detail::Link::Ethernet));
   if(on[MemPressure]) {
     // Activity Monitor's numbers: the kernel's free percentage and its pressure level (1, 2 or 4).
     int freePercent=-1, level=0; size_t size=sizeof(int);
@@ -191,6 +189,9 @@ NSString *fmt(const char *f,double v) { return [NSString stringWithFormat:@(f),v
 NSString *label(Metric m,size_t row,const Reading &r) {
   if(m==CPUClock) return row==0?@"CPU E-core clock":@"CPU P-core clock";
   if(m==Fans&&r.status==Status::Ready&&!std::isnan(r.value)) return [NSString stringWithFormat:@"Fan %zu",row+1];
+  // The HUD row says which number is which; the settings tab keeps the short name.
+  if(m==Disk||m==ExtDisk) return [@(catalog[m].label) stringByAppendingString:@" R/W"];
+  if(m==Network||m==WiFi||m==Wired) return [@(catalog[m].label) stringByAppendingString:@" D/U"];
   return @(catalog[m].label);
 }
 
@@ -204,11 +205,14 @@ NSString *text(Metric m,const Reading &r) {
     case CPUPower: return fmt("~%.1f W",r.value);
     case GPUPower: case SystemPower: return fmt("%.1f W",r.value);
     case ECorePower: case PCorePower: return fmt("%.2f W",r.value);
-    case DiskRead: case DiskWrite: case ExtDiskRead: case ExtDiskWrite:
-    case NetDown: case NetUp: case WifiDown: case WifiUp: case EthDown: case EthUp: {
-      // The unit follows the size, with precision to match, so nothing reads "5120.0 MB/s".
-      const double v=r.value;
-      return v>=1073741824.0?fmt("%.2f GB/s",v/1073741824.0):v>=1048576.0?fmt("%.1f MB/s",v/1048576.0):fmt("%.0f KB/s",v/1024.0);
+    case Disk: case ExtDisk: case Network: case WiFi: case Wired: {
+      // Both numbers share the unit of the larger, which follows the size with precision to match,
+      // so they compare directly and nothing reads "5120.0 MB/s".
+      const double peak=std::max(r.value,r.second);
+      const double div=peak>=1073741824.0?1073741824.0:peak>=1048576.0?1048576.0:1024.0;
+      const int places=div==1024.0?0:div==1048576.0?1:2;
+      return [NSString stringWithFormat:@"%.*f/%.*f %s",places,r.value/div,places,r.second/div,
+              div==1024.0?"KB/s":div==1048576.0?"MB/s":"GB/s"];
     }
     case MemPressure: {
       const int level=int(r.value)/1000;
